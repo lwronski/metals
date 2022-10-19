@@ -20,7 +20,7 @@ import scala.meta.internal.mtags.MtagsEnrichments.*
 import scala.meta.internal.pc.AutoImports.*
 import scala.meta.internal.pc.CompilerAccess
 import scala.meta.internal.pc.DefinitionResultImpl
-import scala.meta.internal.pc.completions.CompletionsProvider
+import scala.meta.internal.pc.completions.CompletionProvider
 import scala.meta.internal.pc.completions.OverrideCompletions
 import scala.meta.internal.semver.SemVer
 import scala.meta.pc.*
@@ -32,6 +32,7 @@ import dotty.tools.dotc.interactive.Interactive
 import dotty.tools.dotc.interactive.InteractiveDriver
 import dotty.tools.dotc.reporting.StoreReporter
 import dotty.tools.dotc.util.*
+import org.eclipse.lsp4j.DocumentHighlight
 import org.eclipse.{lsp4j as l}
 
 case class ScalaPresentationCompiler(
@@ -97,7 +98,7 @@ case class ScalaPresentationCompiler(
       params.token,
     ) { access =>
       val driver = access.compiler()
-      new CompletionsProvider(
+      new CompletionProvider(
         search,
         driver,
         params,
@@ -115,6 +116,17 @@ case class ScalaPresentationCompiler(
     ) { access =>
       val driver = access.compiler()
       PcDefinitionProvider(driver, params, search).definitions()
+    }
+
+  def documentHighlight(
+      params: OffsetParams
+  ): CompletableFuture[ju.List[DocumentHighlight]] =
+    compilerAccess.withNonInterruptableCompiler(
+      List.empty[DocumentHighlight].asJava,
+      params.token,
+    ) { access =>
+      val driver = access.compiler()
+      PcDocumentHighlightProvider.highlights(driver, params).asJava
     }
 
   def shutdown(): Unit =
@@ -156,6 +168,7 @@ case class ScalaPresentationCompiler(
   def autoImports(
       name: String,
       params: scala.meta.pc.OffsetParams,
+      isExtension: java.lang.Boolean,
   ): CompletableFuture[
     ju.List[scala.meta.pc.AutoImportsResult]
   ] =
@@ -172,7 +185,7 @@ case class ScalaPresentationCompiler(
         config,
         buildTargetIdentifier,
       )
-        .autoImports()
+        .autoImports(isExtension)
         .asJava
     }
 
@@ -200,6 +213,24 @@ case class ScalaPresentationCompiler(
         .inferredTypeEdits()
         .asJava
     }
+
+  override def extractMethod(
+      range: RangeParams,
+      extractionPos: OffsetParams,
+  ): CompletableFuture[ju.List[l.TextEdit]] =
+    val empty: ju.List[l.TextEdit] = new ju.ArrayList[l.TextEdit]()
+    compilerAccess.withInterruptableCompiler(empty, range.token) { pc =>
+      new ExtractMethodProvider(
+        range,
+        extractionPos,
+        pc.compiler(),
+        search,
+      )
+        .extractMethod()
+        .asJava
+    }
+  end extractMethod
+
   override def convertToNamedArguments(
       params: OffsetParams,
       argIndices: ju.List[Integer],

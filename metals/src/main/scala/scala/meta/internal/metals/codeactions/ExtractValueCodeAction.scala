@@ -11,8 +11,9 @@ import scala.meta.Term
 import scala.meta.Tree
 import scala.meta.inputs.Position
 import scala.meta.internal.metals.Buffers
-import scala.meta.internal.metals.CodeAction
 import scala.meta.internal.metals.MetalsEnrichments._
+import scala.meta.internal.metals.codeactions.CodeAction
+import scala.meta.internal.metals.codeactions.CodeActionBuilder
 import scala.meta.internal.parsing.Trees
 import scala.meta.pc.CancelToken
 import scala.meta.tokens.Token
@@ -72,20 +73,16 @@ class ExtractValueCodeAction(
             case _ => name
           }
         val replacedArgument =
-          new l.TextEdit(argument.pos.toLSP, replacementText)
+          new l.TextEdit(argument.pos.toLsp, replacementText)
         (replacedArgument :: valueTextWithBraces, argument.toString())
       }
 
     textEdits.map { case (edits, title) =>
-      val codeAction = new l.CodeAction()
-      codeAction.setTitle(ExtractValueCodeAction.title(title))
-      codeAction.setKind(this.kind)
-      codeAction.setEdit(
-        new l.WorkspaceEdit(
-          Map(path.toURI.toString -> edits.asJava).asJava
-        )
+      CodeActionBuilder.build(
+        title = ExtractValueCodeAction.title(title),
+        kind = this.kind,
+        changes = List(path -> edits),
       )
-      codeAction
     }
 
   }
@@ -121,6 +118,10 @@ class ExtractValueCodeAction(
         Some(expr)
       case Term.Do(_, expr) =>
         Some(expr)
+      case Term.New(init) =>
+        init.argss.flatten
+          .find { arg => arg.pos.encloses(range) }
+          .map(applyArgument(_))
       case _ => None
     }
   }
@@ -147,6 +148,8 @@ class ExtractValueCodeAction(
         expr.pos.encloses(range)
       case Term.Do(_, expr) =>
         expr.pos.encloses(range)
+      case Term.New(init) =>
+        init.argss.flatten.exists { arg => arg.pos.encloses(range) }
       case _ => false
     }
   }
@@ -183,10 +186,10 @@ class ExtractValueCodeAction(
         if (defnLineIndentation.headOption.contains('\t')) "\t"
         else "  "
       val innerIndentation = defnLineIndentation + additionalIndent
-      val statStart = stat.pos.toLSP
+      val statStart = stat.pos.toLsp
       statStart.setEnd(statStart.getStart())
 
-      val startBlockPos = equalsPos.toLSP
+      val startBlockPos = equalsPos.toLsp
       startBlockPos.setStart(startBlockPos.getEnd())
       startBlockPos.setEnd(statStart.getStart())
 
@@ -238,7 +241,7 @@ class ExtractValueCodeAction(
 
         val startBlockEdit =
           new l.TextEdit(startBlockPos, startBlockText)
-        val endBracePos = defn.pos.toLSP
+        val endBracePos = defn.pos.toLsp
         endBracePos.setStart(endBracePos.getEnd())
         val endBraceEdit =
           new l.TextEdit(endBracePos, s"\n$defnLineIndentation}")
@@ -248,7 +251,7 @@ class ExtractValueCodeAction(
 
     edits.getOrElse {
       // otherwise, no braces are needed
-      val range = stat.pos.toLSP
+      val range = stat.pos.toLsp
       val start = range.getStart()
       start.setCharacter(0)
       range.setEnd(start)

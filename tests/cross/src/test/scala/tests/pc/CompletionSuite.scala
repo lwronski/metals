@@ -234,41 +234,9 @@ class CompletionSuite extends BaseCompletionSuite {
        |toString(): String
        |""".stripMargin,
     compat = Map(
-      "2.13.7" -> dot2137,
-      "2.13.8" -> dot2137,
-      "2.13" -> dot213,
-      "2.11" ->
-        """|apply[A](xs: A*): List[A]
-           |canBuildFrom[A]: CanBuildFrom[List.Coll,A,List[A]]
-           |empty[A]: List[A]
-           |newBuilder[A]: Builder[A,List[A]]
-           |GenericCanBuildFrom scala.collection.generic.GenTraversableFactory
-           |ReusableCBF: List.GenericCanBuildFrom[Nothing]
-           |concat[A](xss: Traversable[A]*): List[A]
-           |fill[A](n: Int)(elem: => A): List[A]
-           |fill[A](n1: Int, n2: Int)(elem: => A): List[List[A]]
-           |fill[A](n1: Int, n2: Int, n3: Int)(elem: => A): List[List[List[A]]]
-           |fill[A](n1: Int, n2: Int, n3: Int, n4: Int)(elem: => A): List[List[List[List[A]]]]
-           |fill[A](n1: Int, n2: Int, n3: Int, n4: Int, n5: Int)(elem: => A): List[List[List[List[List[A]]]]]
-           |iterate[A](start: A, len: Int)(f: A => A): List[A]
-           |range[T: Integral](start: T, end: T): List[T]
-           |range[T: Integral](start: T, end: T, step: T): List[T]
-           |tabulate[A](n: Int)(f: Int => A): List[A]
-           |tabulate[A](n1: Int, n2: Int)(f: (Int, Int) => A): List[List[A]]
-           |tabulate[A](n1: Int, n2: Int, n3: Int)(f: (Int, Int, Int) => A): List[List[List[A]]]
-           |tabulate[A](n1: Int, n2: Int, n3: Int, n4: Int)(f: (Int, Int, Int, Int) => A): List[List[List[List[A]]]]
-           |tabulate[A](n1: Int, n2: Int, n3: Int, n4: Int, n5: Int)(f: (Int, Int, Int, Int, Int) => A): List[List[List[List[List[A]]]]]
-           |unapplySeq[A](x: List[A]): Some[List[A]]
-           |+(other: String): String
-           |formatted(fmtstr: String): String
-           |asInstanceOf[T0]: T0
-           |equals(obj: Any): Boolean
-           |getClass(): Class[_]
-           |hashCode(): Int
-           |isInstanceOf[T0]: Boolean
-           |synchronized[T0](x$1: T0): T0
-           |toString(): String
-           |""".stripMargin,
+      "2.13.5" -> dot213,
+      "2.13.6" -> dot213,
+      "2.13" -> dot2137,
       "3" ->
         """|empty[A]: List[A]
            |from[B](coll: IterableOnce[B]): List[B]
@@ -310,9 +278,11 @@ class CompletionSuite extends BaseCompletionSuite {
            |synchronized[X0](x$0: X0): X0
            |toString(): String
            |wait(): Unit
-           |wait(timeoutMillis: Long): Unit
-           |wait(timeoutMillis: Long, nanos: Int): Unit
+           |wait(x$0: Long): Unit
+           |wait(x$0: Long, x$1: Int): Unit
            |""".stripMargin,
+      // wait(x$0: Long) won't be replaced with timeoutMills here
+      // but it will be replaced in `completionItem/resolve`
     ),
   )
 
@@ -484,6 +454,15 @@ class CompletionSuite extends BaseCompletionSuite {
        |XPathNodes - javax.xml.xpath
        |PathMatcher - java.nio.file
        |XPathResult - org.w3c.dom.xpath
+       |""".stripMargin,
+  )
+
+  check(
+    "import4",
+    """
+      |import scala.collection.AbstractIterator@@
+      |""".stripMargin,
+    """|AbstractIterator scala.collection
        |""".stripMargin,
   )
 
@@ -958,20 +937,13 @@ class CompletionSuite extends BaseCompletionSuite {
     """|Some scala
        |""".stripMargin,
     compat = Map(
-      ">=3.1.0" ->
-        """|Some scala
-           |Some[A](value: A): Some[A]
-           |SomeToExpr[T: Type: ToExpr]: SomeToExpr[T]
-           |SomeFromExpr[T](using Type[T], FromExpr[T]): SomeFromExpr[T]
-           |""".stripMargin,
       "3" ->
-        """|Some scala
+        """|Some(value) scala
+           |Some scala
            |Some[A](value: A): Some[A]
-           |SomeToExpr - scala.quoted.ToExpr
            |SomeToExpr[T: Type: ToExpr]: SomeToExpr[T]
-           |SomeFromExpr - scala.quoted.FromExpr
            |SomeFromExpr[T](using Type[T], FromExpr[T]): SomeFromExpr[T]
-           |""".stripMargin,
+           |""".stripMargin
     ),
   )
 
@@ -1013,12 +985,6 @@ class CompletionSuite extends BaseCompletionSuite {
        |NoManifest scala.reflect
        |""".stripMargin,
     topLines = Some(2),
-    compat = Map(
-      "3" ->
-        """|NoManifest scala.reflect
-           |NoClassDefFoundError java.lang
-           |""".stripMargin
-    ),
   )
 
   check(
@@ -1040,9 +1006,9 @@ class CompletionSuite extends BaseCompletionSuite {
            |Set scala.collection.immutable
            |""".stripMargin,
       "3" ->
-        """|Seq scala.collection.immutable
+        """|Some(value) scala
+           |Seq scala.collection.immutable
            |Set scala.collection.immutable
-           |Stream scala.collection.immutable
            |""".stripMargin,
     ),
   )
@@ -1066,9 +1032,9 @@ class CompletionSuite extends BaseCompletionSuite {
            |Set scala.collection.immutable
            |""".stripMargin,
       "3" ->
-        """|Seq scala.collection.immutable
+        """|Some[?] scala
+           |Seq scala.collection.immutable
            |Set scala.collection.immutable
-           |Stream scala.collection.immutable
            |""".stripMargin,
     ),
   )
@@ -1522,4 +1488,42 @@ class CompletionSuite extends BaseCompletionSuite {
     ),
   )
 
+  check(
+    "class-members-trait-issue",
+    s"""|package x
+        |class Foo(
+        |  first: java.util.List[Int],
+        |  second: String,
+        |) {
+        |  fir@@
+        |  def abc: Int = 23
+        |}
+        |""".stripMargin,
+    """|first: java.util.List[Int]
+       |""".stripMargin,
+    compat = Map(
+      "2" ->
+        """|first: List[Int]
+           |""".stripMargin
+    ),
+  )
+
+  check(
+    "object-at-type-pos",
+    s"""|object Foo {
+        |  class FFF
+        |}
+        |object Main {
+        |  def f1(a: Fo@@)
+        |}
+        |""".stripMargin,
+    """|Foo object-at-type-pos
+       |""".stripMargin,
+    compat = Map(
+      "2" ->
+        """|Foo `object-at-type-pos`
+           |""".stripMargin
+    ),
+    topLines = Some(1),
+  )
 }

@@ -142,7 +142,7 @@ final class Diagnostics(
     val path = params.getTextDocument.getUri.toAbsolutePath
     onPublishDiagnostics(
       path,
-      params.getDiagnostics().asScala.map(_.toLSP).toSeq,
+      params.getDiagnostics().asScala.map(_.toLsp).toSeq,
       params.getReset(),
     )
   }
@@ -261,12 +261,14 @@ final class Diagnostics(
       snapshot: Input,
   ): Option[Diagnostic] = {
     val result = edit.toRevised(d.getRange).map { range =>
-      new l.Diagnostic(
+      val ld = new l.Diagnostic(
         range,
         d.getMessage,
         d.getSeverity,
         d.getSource,
       )
+      ld.setData(d.getData)
+      ld
     }
     if (result.isEmpty) {
       d.getRange.toMeta(snapshot).foreach { pos =>

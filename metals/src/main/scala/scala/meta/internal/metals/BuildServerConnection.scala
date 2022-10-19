@@ -4,6 +4,7 @@ import java.io.IOException
 import java.io.InputStream
 import java.net.URI
 import java.util.Collections
+import java.util.concurrent.CancellationException
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
@@ -23,6 +24,7 @@ import scala.util.Try
 import scala.meta.internal.builds.MillBuildTool
 import scala.meta.internal.builds.SbtBuildTool
 import scala.meta.internal.metals.MetalsEnrichments._
+import scala.meta.internal.metals.ammonite.Ammonite
 import scala.meta.internal.metals.scalacli.ScalaCli
 import scala.meta.internal.pc.InterruptException
 import scala.meta.internal.semver.SemVer
@@ -63,6 +65,7 @@ class BuildServerConnection private (
 
   private val ongoingRequests =
     new MutableCancelable().addAll(initialConnection.cancelables)
+  private val ongoingCompilations = new MutableCancelable()
 
   def version: String = _version.get()
 
@@ -76,6 +79,8 @@ class BuildServerConnection private (
   def isMill: Boolean = name == MillBuildTool.name
 
   def isScalaCLI: Boolean = name == ScalaCli.name
+
+  def isAmmonite: Boolean = name == Ammonite.name
 
   /* Currently only Bloop and sbt support running single test cases
    * and ScalaCLI uses Bloop underneath.
@@ -131,7 +136,16 @@ class BuildServerConnection private (
     }
 
   def compile(params: CompileParams): CompletableFuture[CompileResult] = {
-    register(server => server.buildTargetCompile(params))
+    register(
+      server => server.buildTargetCompile(params),
+      isCompile = true,
+      onFail = Some(
+        (
+          new CompileResult(StatusCode.CANCELLED),
+          s"Cancelling compilation on ${name} server",
+        )
+      ),
+    )
   }
 
   def clean(params: CleanCacheParams): CompletableFuture[CleanCacheResult] = {
@@ -176,7 +190,7 @@ class BuildServerConnection private (
     val resultOnJavacOptionsUnsupported = new JavacOptionsResult(
       List.empty[JavacOptionsItem].asJava
     )
-    if (isSbt) Future.successful(resultOnJavacOptionsUnsupported)
+    if (isSbt || isAmmonite) Future.successful(resultOnJavacOptionsUnsupported)
     else {
       val onFail = Some(
         (
@@ -241,7 +255,12 @@ class BuildServerConnection private (
   override def cancel(): Unit = {
     if (cancelled.compareAndSet(false, true)) {
       ongoingRequests.cancel()
+      ongoingCompilations.cancel()
     }
+  }
+
+  def cancelCompilations(): Unit = {
+    ongoingCompilations.cancel()
   }
 
   private def askUser(): Future[BuildServerConnection.LauncherConnection] = {
@@ -287,31 +306,51 @@ class BuildServerConnection private (
     }
 
   }
+
   private def register[T: ClassTag](
       action: MetalsBuildServer => CompletableFuture[T],
       onFail: => Option[(T, String)] = None,
+      isCompile: Boolean = false,
   ): CompletableFuture[T] = {
+
+    def runWithCanceling(
+        launcherConnection: BuildServerConnection.LauncherConnection
+    ): Future[T] = {
+      val resultFuture = action(launcherConnection.server)
+      val cancelable = Cancelable { () =>
+        Try(resultFuture.cancel(true))
+      }
+      if (isCompile) ongoingCompilations.add(cancelable)
+      else ongoingRequests.add(cancelable)
+
+      val result = resultFuture.asScala
+
+      result.onComplete { _ =>
+        if (isCompile) ongoingCompilations.remove(cancelable)
+        else ongoingRequests.remove(cancelable)
+      }
+      result
+    }
     val original = connection
     val actionFuture = original
       .flatMap { launcherConnection =>
-        val resultFuture = action(launcherConnection.server)
-        ongoingRequests.add(
-          Cancelable(() =>
-            Try(resultFuture.completeExceptionally(new InterruptedException()))
-          )
-        )
-        resultFuture.asScala
+        runWithCanceling(launcherConnection)
       }
       .recoverWith {
         case io: JsonRpcException if io.getCause.isInstanceOf[IOException] =>
           synchronized {
-            reconnect().flatMap(conn => action(conn.server).asScala)
+            reconnect().flatMap(conn => runWithCanceling(conn))
           }
         case t
             if implicitly[ClassTag[T]].runtimeClass.getSimpleName != "Object" =>
           onFail
             .map { case (defaultResult, message) =>
-              scribe.info(message, t)
+              t match {
+                case _: CancellationException =>
+                  scribe.info(message)
+                case _ =>
+                  scribe.info(message, t)
+              }
               Future.successful(defaultResult)
             }
             .getOrElse({

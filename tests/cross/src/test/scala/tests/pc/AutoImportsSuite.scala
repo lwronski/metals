@@ -1,5 +1,6 @@
 package tests.pc
 
+import munit.Location
 import tests.BaseAutoImportsSuite
 
 class AutoImportsSuite extends BaseAutoImportsSuite {
@@ -78,6 +79,29 @@ class AutoImportsSuite extends BaseAutoImportsSuite {
        |  Future.successful(2)
        |}
        |""".stripMargin,
+  )
+
+  checkEdit(
+    "scala-cli-sc-using-directives",
+    """|object main {
+       |/*<script>*///> using scala "3.1.3"
+       |
+       |object x {
+       |  <<Try>>("1".toString)
+       |}
+       |}
+       |
+       |""".stripMargin,
+    """|object main {
+       |/*<script>*///> using scala "3.1.3"
+       |import scala.util.Try
+       |
+       |object x {
+       |  Try("1".toString)
+       |}
+       |}
+       |""".stripMargin,
+    filename = "A.sc",
   )
 
   checkEdit(
@@ -260,25 +284,15 @@ class AutoImportsSuite extends BaseAutoImportsSuite {
   checkAmmoniteEdit(
     "first-auto-import-amm-script",
     ammoniteWrapper(
-      """val p: <<Path>> = ???
-        |""".stripMargin
+      """|
+         |val p: <<Path>> = ???
+         |""".stripMargin
     ),
-    // Import added *before* the wrapper here…
-    // This *seems* wrong, but the logic converting the scala file
-    // edits to sc file edits will simply add it at the beginning of
-    // the sc file, as expected.
-    "import java.nio.file.Path\n" +
-      ammoniteWrapper(
-        """val p: Path = ???
-          |""".stripMargin
-      ),
-    compat = Map(
-      "3" ->
-        ammoniteWrapper(
-          """|import java.nio.file.Path
-             |val p: Path = ???
-             |""".stripMargin
-        )
+    ammoniteWrapper(
+      """|import java.nio.file.Path
+         |
+         |val p: Path = ???
+         |""".stripMargin
     ),
   )
 
@@ -297,6 +311,46 @@ class AutoImportsSuite extends BaseAutoImportsSuite {
     ),
   )
 
+  checkAmmoniteEdit(
+    "amm-objects",
+    ammoniteWrapper(
+      """|
+         |object a {
+         |  object b {
+         |    val p: <<Path>> = ???
+         |  }
+         |}
+         |""".stripMargin
+    ),
+    ammoniteWrapper(
+      """|import java.nio.file.Path
+         |
+         |object a {
+         |  object b {
+         |    val p: Path = ???
+         |  }
+         |}
+         |""".stripMargin
+    ),
+  )
+
+  checkAmmoniteEdit(
+    "first-auto-import-amm-script-with-header",
+    ammoniteWrapper(
+      """|// scala 2.13.1
+         |
+         |val p: <<Path>> = ???
+         |""".stripMargin
+    ),
+    ammoniteWrapper(
+      """|// scala 2.13.1
+         |import java.nio.file.Path
+         |
+         |val p: Path = ???
+         |""".stripMargin
+    ),
+  )
+
   private def ammoniteWrapper(code: String): String =
     // Vaguely looks like a scala file that Ammonite generates
     // from a sc file.
@@ -309,8 +363,27 @@ class AutoImportsSuite extends BaseAutoImportsSuite {
         |}
         |
         |object test{
+        |/*<start>*/
         |$code
         |}
         |""".stripMargin
+
+  // https://dotty.epfl.ch/docs/internals/syntax.html#soft-keywords
+  List("infix", "inline", "opaque", "open", "transparent", "as", "derives",
+    "end", "extension", "throws", "using").foreach(softKeywordCheck)
+
+  private def softKeywordCheck(keyword: String)(implicit loc: Location) =
+    checkEdit(
+      s"'$keyword'-named-object".tag(IgnoreScala2),
+      s"""|
+          |object $keyword{ object ABC }
+          |object Main{ val obj = <<ABC>> }
+          |""".stripMargin,
+      s"""|import $keyword.ABC
+          |
+          |object $keyword{ object ABC }
+          |object Main{ val obj = ABC }
+          |""".stripMargin,
+    )
 
 }

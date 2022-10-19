@@ -3,6 +3,7 @@ package scala.meta.pc;
 import org.eclipse.lsp4j.Location;
 import org.eclipse.lsp4j.CompletionItem;
 import org.eclipse.lsp4j.CompletionList;
+import org.eclipse.lsp4j.DocumentHighlight;
 import org.eclipse.lsp4j.Hover;
 import org.eclipse.lsp4j.SignatureHelp;
 import org.eclipse.lsp4j.TextEdit;
@@ -14,6 +15,7 @@ import org.eclipse.lsp4j.DocumentRangeFormattingParams;
 import org.eclipse.lsp4j.TextEdit;
 import org.eclipse.lsp4j.DocumentOnTypeFormattingParams;
 import org.eclipse.lsp4j.SelectionRange;
+
 
 import java.net.URI;
 import java.nio.file.Path;
@@ -70,9 +72,13 @@ public abstract class PresentationCompiler {
 
     /**
      * Returns the definition of the symbol at the given position.
-
      */
     public abstract CompletableFuture<DefinitionResult> definition(OffsetParams params);
+
+    /**
+	 * Returns the occurrences of the symbol under the current position in the entire file.
+	 */
+    public abstract CompletableFuture<java.util.List<DocumentHighlight>> documentHighlight(OffsetParams params);
 
     /**
      * Return decoded and pretty printed TASTy content for .scala or .tasty file.
@@ -83,7 +89,7 @@ public abstract class PresentationCompiler {
     /**
      * Return the necessary imports for a symbol at the given position.
      */
-    public abstract CompletableFuture<List<AutoImportsResult>> autoImports(String name, OffsetParams params);
+    public abstract CompletableFuture<List<AutoImportsResult>> autoImports(String name, OffsetParams params, Boolean isExtension);
 
     /**
      * Return the missing implements and imports for the symbol at the given position.
@@ -94,6 +100,13 @@ public abstract class PresentationCompiler {
      * Return the missing implements and imports for the symbol at the given position.
      */
     public abstract CompletableFuture<List<TextEdit>> insertInferredType(OffsetParams params);
+
+    /**
+     * Extract method in selected range
+     * @param range range to extract from
+     * @param extractionPos position in file to extract to
+     */
+    public abstract CompletableFuture<List<TextEdit>> extractMethod(RangeParams range, OffsetParams extractionPos);
 
     /**
      * Return named arguments for the apply method that encloses the given position.

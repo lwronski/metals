@@ -26,12 +26,14 @@ import scala.meta.pc.DefinitionResult
 import scala.meta.pc.OffsetParams
 import scala.meta.pc.PresentationCompiler
 import scala.meta.pc.PresentationCompilerConfig
+import scala.meta.pc.RangeParams
 import scala.meta.pc.SymbolSearch
 import scala.meta.pc.VirtualFileParams
 
 import org.eclipse.lsp4j.CompletionItem
 import org.eclipse.lsp4j.CompletionList
 import org.eclipse.lsp4j.Diagnostic
+import org.eclipse.lsp4j.DocumentHighlight
 import org.eclipse.lsp4j.Hover
 import org.eclipse.lsp4j.SelectionRange
 import org.eclipse.lsp4j.SignatureHelp
@@ -47,6 +49,7 @@ case class ScalaPresentationCompiler(
     config: PresentationCompilerConfig = PresentationCompilerConfigImpl(),
     workspace: Option[Path] = None
 ) extends PresentationCompiler {
+
   implicit val executionContext: ExecutionContextExecutor = ec
 
   val scalaVersion = BuildInfo.scalaCompilerVersion
@@ -141,6 +144,19 @@ case class ScalaPresentationCompiler(
       new InferredTypeProvider(pc.compiler(), params).inferredTypeEdits().asJava
     }
   }
+  override def extractMethod(
+      range: RangeParams,
+      extractionPos: OffsetParams
+  ): CompletableFuture[ju.List[TextEdit]] = {
+    val empty: ju.List[TextEdit] = new ju.ArrayList[TextEdit]()
+    compilerAccess.withInterruptableCompiler(empty, range.token) { pc =>
+      new ExtractMethodProvider(
+        pc.compiler(),
+        range,
+        extractionPos
+      ).extractMethod.asJava
+    }
+  }
 
   override def convertToNamedArguments(
       params: OffsetParams,
@@ -158,7 +174,8 @@ case class ScalaPresentationCompiler(
 
   override def autoImports(
       name: String,
-      params: OffsetParams
+      params: OffsetParams,
+      isExtension: java.lang.Boolean // ignore, because Scala2 doesn't support extension method
   ): CompletableFuture[ju.List[AutoImportsResult]] =
     compilerAccess.withInterruptableCompiler(
       List.empty[AutoImportsResult].asJava,
@@ -213,6 +230,16 @@ case class ScalaPresentationCompiler(
       params.token
     ) { pc => new PcDefinitionProvider(pc.compiler(), params).definition() }
   }
+
+  override def documentHighlight(
+      params: OffsetParams
+  ): CompletableFuture[util.List[DocumentHighlight]] =
+    compilerAccess.withInterruptableCompiler(
+      List.empty[DocumentHighlight].asJava,
+      params.token()
+    ) { pc =>
+      new PcDocumentHighlightProvider(pc.compiler()).highlights(params).asJava
+    }
 
   override def semanticdbTextDocument(
       uri: URI,

@@ -2,8 +2,6 @@ package tests.pc
 
 import java.nio.file.Path
 
-import scala.collection.Seq
-
 import coursierapi.Dependency
 import tests.BaseCompletionSuite
 import tests.BuildInfoVersions
@@ -60,6 +58,10 @@ class MacroCompletionSuite extends BaseCompletionSuite {
       .map(plugin => s"-Xplugin:$plugin")
 
   override def beforeAll(): Unit = ()
+
+  // compiler plugins are not published for nightlies
+  override def munitIgnore: Boolean =
+    scalaVersion.contains("-bin-") || super.munitIgnore
 
   check(
     "generic",

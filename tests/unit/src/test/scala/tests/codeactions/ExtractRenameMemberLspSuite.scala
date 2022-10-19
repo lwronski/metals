@@ -453,8 +453,8 @@ class ExtractRenameMemberLspSuite
       val input = Input.VirtualFile(filename, sourceText)
       val pos = scala.meta.Position
         .Range(input, startOffset, endOffset - "<<".length())
-        .toLSP
-      val extractRenameMember = new ExtractRenameMember(trees)
+        .toLsp
+      val extractRenameMember = new ExtractRenameMember(trees, client)
       buffers.put(path, sourceText)
       val textDocumentIdentifier = path.toTextDocumentIdentifier
       val codeActionParams = new CodeActionParams(

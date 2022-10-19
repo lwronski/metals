@@ -12,6 +12,8 @@ import munit.TestOptions
 
 trait BaseAutoImportsSuite extends BaseCodeActionSuite {
 
+  val isExtensionMethods: Boolean = false
+
   def check(
       name: String,
       original: String,
@@ -32,10 +34,12 @@ trait BaseAutoImportsSuite extends BaseCodeActionSuite {
       original: String,
       expected: String,
       selection: Int = 0,
+      filename: String = "A.scala",
+      compat: Map[String, String] = Map.empty,
   )(implicit
       loc: Location
   ): Unit =
-    checkEditSelection(name, "A.scala", original, expected, selection)
+    checkEditSelection(name, filename, original, expected, selection, compat)
 
   def checkAmmoniteEdit(
       name: TestOptions,
@@ -88,6 +92,7 @@ trait BaseAutoImportsSuite extends BaseCodeActionSuite {
           offset,
           cancelToken,
         ),
+        isExtensionMethods,
       )
       .get()
     result.asScala.toList

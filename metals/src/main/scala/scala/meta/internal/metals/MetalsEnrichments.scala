@@ -6,7 +6,6 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.FileAlreadyExistsException
 import java.nio.file.Files
 import java.nio.file.Path
-import java.nio.file.Paths
 import java.nio.file.StandardCopyOption
 import java.nio.file.StandardOpenOption
 import java.util
@@ -344,19 +343,6 @@ object MetalsEnrichments
     def isInside(prefix: AbsolutePath): Boolean =
       toRelativeInside(prefix).isDefined
 
-    def jarPath: Option[AbsolutePath] = {
-      val filesystem = path.toNIO.getFileSystem()
-      if (filesystem.provider().getScheme().equals("jar")) {
-        Some(
-          AbsolutePath(
-            Paths.get(filesystem.toString)
-          )
-        )
-      } else {
-        None
-      }
-    }
-
     /**
      * Writes zip file contents to disk under $workspace/.metals/readonly.
      *
@@ -691,15 +677,18 @@ object MetalsEnrichments
       val severity = d.getSeverity.toString.toLowerCase()
       s"$severity:$hint $uri:${d.getRange.getStart.getLine} ${d.getMessage}"
     }
+    def asTextEdit: Option[l.TextEdit] = {
+      decodeJson(d.getData, classOf[l.TextEdit])
+    }
   }
 
   implicit class XtensionSeverityBsp(sev: b.DiagnosticSeverity) {
-    def toLSP: l.DiagnosticSeverity =
+    def toLsp: l.DiagnosticSeverity =
       l.DiagnosticSeverity.forValue(sev.getValue)
   }
 
   implicit class XtensionPositionBSp(pos: b.Position) {
-    def toLSP: l.Position =
+    def toLsp: l.Position =
       new l.Position(pos.getLine, pos.getCharacter)
   }
 
@@ -707,11 +696,16 @@ object MetalsEnrichments
     def inString(text: String): Option[String] = {
       var i = 0
       var max = 0
+      def isNewline = text.charAt(i) == '\n'
       while (max < range.startLine) {
-        if (text.charAt(i) == '\n') max += 1
+        if (isNewline) max += 1
         i += 1
       }
       val start = i + range.startCharacter
+      while (max < range.endLine) {
+        if (isNewline) max += 1
+        i += 1
+      }
       val end = i + range.endCharacter
       if (start < text.size && end <= text.size)
         Some(text.substring(start, end))
@@ -743,8 +737,8 @@ object MetalsEnrichments
         )
       ).toOption
 
-    def toLSP: l.Range =
-      new l.Range(range.getStart.toLSP, range.getEnd.toLSP)
+    def toLsp: l.Range =
+      new l.Range(range.getStart.toLsp, range.getEnd.toLsp)
   }
 
   implicit class XtensionSymbolOccurrenceProtocol(occ: s.SymbolOccurrence) {
@@ -761,15 +755,18 @@ object MetalsEnrichments
   }
 
   implicit class XtensionDiagnosticBsp(diag: b.Diagnostic) {
-    def toLSP: l.Diagnostic =
-      new l.Diagnostic(
-        diag.getRange.toLSP,
+    def toLsp: l.Diagnostic = {
+      val ld = new l.Diagnostic(
+        diag.getRange.toLsp,
         fansi.Str(diag.getMessage, ErrorMode.Strip).plainText,
-        diag.getSeverity.toLSP,
+        diag.getSeverity.toLsp,
         if (diag.getSource == null) "scalac" else diag.getSource,
         // We omit diag.getCode since Bloop's BSP implementation uses 'code' with different semantics
         // than LSP. See https://github.com/scalacenter/bloop/issues/1134 for details
       )
+      ld.setData(diag.getData)
+      ld
+    }
   }
 
   implicit class XtensionHttpExchange(exchange: HttpServerExchange) {
@@ -1076,7 +1073,7 @@ object MetalsEnrichments
   ) {
 
     // LSP Position is 0-based, while breakpoints are 1-based
-    def toLSP = new l.Position(breakpoint.getLine() - 1, breakpoint.getColumn())
+    def toLsp = new l.Position(breakpoint.getLine() - 1, breakpoint.getColumn())
   }
 
 }

@@ -9,9 +9,10 @@ import scala.meta.Term
 import scala.meta.Tree
 import scala.meta.inputs.Position
 import scala.meta.internal.metals.Buffers
-import scala.meta.internal.metals.CodeAction
 import scala.meta.internal.metals.MetalsEnrichments._
 import scala.meta.internal.metals.ServerCommands
+import scala.meta.internal.metals.codeactions.CodeAction
+import scala.meta.internal.metals.codeactions.CodeActionBuilder
 import scala.meta.internal.parsing.Trees
 import scala.meta.io.AbsolutePath
 import scala.meta.pc.CancelToken
@@ -79,7 +80,7 @@ class CreateCompanionObjectCodeAction(
           case _ => None
         }
       }
-    endMarkerPos.getOrElse(t.pos).toLSP.getEnd
+    endMarkerPos.getOrElse(t.pos).toLsp.getEnd
   }
 
   private def getIndentationForPositionInDocument(
@@ -118,11 +119,6 @@ class CreateCompanionObjectCodeAction(
       hasBraces: Boolean,
       bracelessOK: Boolean,
   ): l.CodeAction = {
-    val codeAction = new l.CodeAction()
-    codeAction.setTitle(
-      CreateCompanionObjectCodeAction.companionObjectCreation(name)
-    )
-    codeAction.setKind(this.kind)
     val range = new l.Range(pos, pos)
 
     val braceFulCompanion =
@@ -145,18 +141,21 @@ class CreateCompanionObjectCodeAction(
     val companionObjectStartPosition = new l.Position()
     companionObjectStartPosition.setLine(pos.getLine + 3)
 
-    codeAction.setCommand(
+    val companionObjectCommand =
       buildCommandForNavigatingToCompanionObject(
         uri,
         companionObjectStartPosition,
       )
+
+    val edits =
+      List(path -> List(companionObjectTextEdit))
+
+    CodeActionBuilder.build(
+      title = CreateCompanionObjectCodeAction.companionObjectCreation(name),
+      kind = this.kind,
+      command = Some(companionObjectCommand),
+      changes = edits,
     )
-    codeAction.setEdit(
-      new l.WorkspaceEdit(
-        Map(path.toURI.toString -> List(companionObjectTextEdit).asJava).asJava
-      )
-    )
-    codeAction
   }
 
   private def buildCommandForNavigatingToCompanionObject(
@@ -164,7 +163,7 @@ class CreateCompanionObjectCodeAction(
       companionObjectPosion: l.Position,
   ): l.Command = {
     val cursorRange = new l.Range(companionObjectPosion, companionObjectPosion)
-    ServerCommands.GotoPosition.toLSP(
+    ServerCommands.GotoPosition.toLsp(
       new Location(
         uri,
         cursorRange,

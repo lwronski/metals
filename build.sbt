@@ -5,7 +5,11 @@ import Tests._
 
 Global / onChangedBuildSource := ReloadOnSourceChanges
 
-def localSnapshotVersion = "0.11.9-SNAPSHOT"
+// For testing nightlies
+Global / resolvers += "scala-integration" at
+  "https://scala-ci.typesafe.com/artifactory/scala-integration/"
+
+def localSnapshotVersion = "0.11.10-SNAPSHOT"
 def isCI = System.getenv("CI") != null
 
 def isScala211(v: Option[(Long, Long)]): Boolean = v.contains((2, 11))
@@ -144,6 +148,12 @@ commands ++= Seq(
   Command.single("test-mtags-dyn") { (s, scalaV) =>
     crossTestDyn(s, scalaV)
   },
+  // this is one is needed for `.github/workflows/check_scala3_nightly`
+  Command.single("save-non-published-nightlies") { (s, path) =>
+    val versions = Scala3NightlyVersions.nonPublishedNightlyVersions
+    IO.write(file(path), versions.map(_.original).mkString("\n"))
+    s
+  },
 )
 
 // -Xlint is unusable because of
@@ -263,6 +273,8 @@ val mtagsSettings = List(
     "com.thoughtworks.qdox" % "qdox" % V.qdox, // for java mtags
     "org.scala-lang.modules" %% "scala-java8-compat" % V.java8Compat,
     "org.jsoup" % "jsoup" % V.jsoup, // for extracting HTML from javadocs
+    // for ivy completions
+    "io.get-coursier" % "interface" % V.coursierInterfaces,
   ),
   libraryDependencies ++= crossSetting(
     scalaVersion.value,
@@ -300,6 +312,17 @@ val mtagsSettings = List(
   buildInfoKeys := Seq[BuildInfoKey](
     "scalaCompilerVersion" -> scalaVersion.value
   ),
+  Compile / unmanagedSourceDirectories := {
+    val current = (Compile / unmanagedSourceDirectories).value
+    val base = (Compile / sourceDirectory).value
+    val regex = "(\\d+)\\.(\\d+)\\.(\\d+).*".r
+    // For scala 2.13.9/10 we need to have a special Compat.scala
+    // For this case filter out `scala-2.13` directory that comes by default
+    if (scalaVersion.value == "2.13.9" || scalaVersion.value == "2.13.10")
+      current.filter(f => f.getName() != "scala-2.13")
+    else
+      current
+  },
 )
 
 lazy val mtags3 = project
@@ -341,16 +364,16 @@ lazy val metals = project
       // =================
       // for bloom filters
       V.guava,
-      "com.geirsson" %% "metaconfig-core" % "0.11.0",
+      "com.geirsson" %% "metaconfig-core" % "0.11.1",
       // for measuring memory footprint
       "org.openjdk.jol" % "jol-core" % "0.16",
       // for file watching
       "com.swoval" % "file-tree-views" % "2.1.9",
       // for http client
-      "io.undertow" % "undertow-core" % "2.2.19.Final",
-      "org.jboss.xnio" % "xnio-nio" % "3.8.7.Final",
+      "io.undertow" % "undertow-core" % "2.2.20.Final",
+      "org.jboss.xnio" % "xnio-nio" % "3.8.8.Final",
       // for persistent data like "dismissed notification"
-      "org.flywaydb" % "flyway-core" % "9.1.3",
+      "org.flywaydb" % "flyway-core" % "9.4.0",
       "com.h2database" % "h2" % "2.1.214",
       // for BSP
       "org.scala-sbt.ipcsocket" % "ipcsocket" % "1.5.0",
@@ -404,7 +427,7 @@ lazy val metals = project
       "org.scalameta" %% "scalameta" % V.scalameta,
       "org.scalameta" % "semanticdb-scalac-core" % V.scalameta cross CrossVersion.full,
       // For starting Ammonite
-      "io.github.alexarchambault.ammonite" %% "ammonite-runner" % "0.3.3",
+      "io.github.alexarchambault.ammonite" %% "ammonite-runner" % "0.4.0",
       "org.scala-lang.modules" %% "scala-xml" % "2.1.0",
       "org.scala-lang.modules" %% "scala-parallel-collections" % "1.0.4",
       ("org.virtuslab.scala-cli" % "scala-cli-bsp" % V.scalaCli)

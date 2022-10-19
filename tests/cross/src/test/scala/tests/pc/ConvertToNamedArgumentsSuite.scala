@@ -26,6 +26,57 @@ class ConvertToNamedArgumentsSuite extends BaseCodeActionSuite {
        |}""".stripMargin,
   )
 
+  checkEdit(
+    "backticked-name",
+    """|object A{
+       |  final case class Foo(`type`: Int, arg: String)
+       |  val a = <<Foo(1, "a")>>
+       |}""".stripMargin,
+    List(0, 1),
+    """|object A{
+       |  final case class Foo(`type`: Int, arg: String)
+       |  val a = Foo(`type` = 1, arg = "a")
+       |}""".stripMargin,
+  )
+
+  checkEdit(
+    "backticked-name-method",
+    """|object A{
+       |  def foo(`type`: Int, arg: String) = "a"
+       |  val a = <<foo(1, "a")>>
+       |}""".stripMargin,
+    List(0, 1),
+    """|object A{
+       |  def foo(`type`: Int, arg: String) = "a"
+       |  val a = foo(`type` = 1, arg = "a")
+       |}""".stripMargin,
+  )
+
+  checkEdit(
+    "new-apply",
+    """|object Something {
+       |  class Foo(param1: Int, param2: Int)
+       |  val a = <<new Foo(1, param2 = 2)>>
+       |}""".stripMargin,
+    List(0),
+    """|object Something {
+       |  class Foo(param1: Int, param2: Int)
+       |  val a = new Foo(param1 = 1, param2 = 2)
+       |}""".stripMargin,
+  )
+  checkEdit(
+    "new-apply-multiple",
+    """|object Something {
+       |  class Foo(param1: Int, param2: Int)(param3: Int)
+       |  val a = <<new Foo(1, param2 = 2)(3)>>
+       |}""".stripMargin,
+    List(0, 2),
+    """|object Something {
+       |  class Foo(param1: Int, param2: Int)(param3: Int)
+       |  val a = new Foo(param1 = 1, param2 = 2)(param3 = 3)
+       |}""".stripMargin,
+  )
+
   def checkEdit(
       name: TestOptions,
       original: String,

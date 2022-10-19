@@ -175,11 +175,11 @@ object InterpolatorCompletions:
               CompletionValue.Interpolator(
                 sym,
                 label,
-                Some(newText(name, suffix, identOrSelect)),
+                Some(newText(name, suffix.toEditOpt, identOrSelect)),
                 Nil,
-                Some(cursor.withStart(identOrSelect.span.start).toLSP),
+                Some(cursor.withStart(identOrSelect.span.start).toLsp),
                 // Needed for VS Code which will not show the completion otherwise
-                Some(identOrSelect.show + "." + label),
+                Some(identOrSelect.name.toString() + "." + label),
                 isExtension = isExtension,
               ),
           )
@@ -245,7 +245,7 @@ object InterpolatorCompletions:
     val span = position.span
     val nameStart =
       span.withStart(span.start - interpolator.name.size)
-    val nameRange = position.withSpan(nameStart).toLSP
+    val nameRange = position.withSpan(nameStart).toLsp
     val hasClosingBrace: Boolean = text.charAt(span.point) == '}'
     val hasOpeningBrace: Boolean = text.charAt(
       span.start - interpolator.name.size - 1
@@ -254,14 +254,14 @@ object InterpolatorCompletions:
     def additionalEdits(): List[l.TextEdit] =
       val interpolatorEdit =
         if !hasStringInterpolator then
-          val range = lit.sourcePos.withEnd(lit.span.start).toLSP
+          val range = lit.sourcePos.withEnd(lit.span.start).toLsp
           List(new l.TextEdit(range, "s"))
         else Nil
       val dollarEdits = for
         i <- lit.span.start to lit.span.end
         if !hasStringInterpolator &&
           text.charAt(i) == '$' && i != interpolator.dollar
-      yield new l.TextEdit(lit.sourcePos.focusAt(i).toLSP, "$")
+      yield new l.TextEdit(lit.sourcePos.focusAt(i).toLsp, "$")
       interpolatorEdit ++ dollarEdits
     end additionalEdits
 
@@ -308,7 +308,7 @@ object InterpolatorCompletions:
             CompletionValue.Interpolator(
               sym,
               label,
-              Some(newText(name, suffix)),
+              Some(newText(name, suffix.toEditOpt)),
               additionalEdits(),
               Some(nameRange),
               None,

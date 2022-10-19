@@ -60,7 +60,7 @@ class CompletionProvider(
     val start = inferIdentStart(pos, params.text())
     val end = inferIdentEnd(pos, params.text())
     val oldText = params.text().substring(start, end)
-    val stripSuffix = pos.withStart(start).withEnd(end).toLSP
+    val stripSuffix = pos.withStart(start).withEnd(end).toLsp
 
     def textEdit(newText: String, range: l.Range = editRange): l.TextEdit = {
       if (newText == oldText) new l.TextEdit(stripSuffix, newText)
@@ -328,7 +328,8 @@ class CompletionProvider(
         !isFileAmmoniteCompletion() &&
         completion.isCandidate(head) &&
         !head.sym.name.containsName(CURSOR) &&
-        isNotLocalForwardReference
+        isNotLocalForwardReference &&
+        !isAliasCompletion(head)
       ) {
         isSeen += id
         buf += head
@@ -403,7 +404,7 @@ class CompletionProvider(
     lazy val editRange = pos
       .withStart(inferIdentStart(pos, params.text()))
       .withEnd(pos.point)
-      .toLSP
+      .toLsp
     val noQuery = "$a"
     def expected(e: Throwable) = {
       completionPosition(
@@ -451,29 +452,8 @@ class CompletionProvider(
       val isTypeMember = kind == CompletionListKind.Type
       params.checkCanceled()
       val matchingResults = completions.matchingResults { entered => name =>
-        val decoded = entered.decoded
-
-        /**
-         * NOTE(tgodzik): presentation compiler bug https://github.com/scala/scala/pull/8193
-         *  should be removed once we drop support for 2.12.8 and 2.13.0
-         *  in case we have a comment presentation compiler will see it as the name
-         *  CompletionIssueSuite.issue-813 for more details
-         */
-        val realEntered =
-          if (decoded.startsWith("//") || decoded.startsWith("/*")) { // start of a comment
-            // we reverse the situation and look for the word from start of complition to either '.' or ' '
-            val reversedString = decoded.reverse
-            val lastSpace = reversedString.indexOfSlice(" ")
-            val lastDot = reversedString.indexOfSlice(".")
-            val startOfWord =
-              if (lastSpace < lastDot && lastSpace >= 0) lastSpace else lastDot
-            reversedString.slice(0, startOfWord).reverse
-          } else {
-            entered.toString
-          }
-        if (isTypeMember)
-          CompletionFuzzy.matchesSubCharacters(realEntered, name)
-        else CompletionFuzzy.matches(realEntered, name)
+        if (isTypeMember) CompletionFuzzy.matchesSubCharacters(entered, name)
+        else CompletionFuzzy.matches(entered, name)
       }
 
       val latestParentTrees = getLastVisitedParentTrees(pos)

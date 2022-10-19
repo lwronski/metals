@@ -90,7 +90,7 @@ trait CommonMtagsEnrichments {
         pos.endColumn
       )
     }
-    def toLSP: l.Range = {
+    def toLsp: l.Range = {
       new l.Range(
         new l.Position(pos.startLine, pos.startColumn),
         new l.Position(pos.endLine, pos.endColumn)
@@ -159,9 +159,9 @@ trait CommonMtagsEnrichments {
       startsBeforeOrAt && endsAtOrAfter
     }
     def toLocation(uri: String): l.Location = {
-      new l.Location(uri, range.toLSP)
+      new l.Location(uri, range.toLsp)
     }
-    def toLSP: l.Range = {
+    def toLsp: l.Range = {
       val start = new l.Position(range.startLine, range.startCharacter)
       val end = new l.Position(range.endLine, range.endCharacter)
       new l.Range(start, end)
@@ -358,6 +358,8 @@ trait CommonMtagsEnrichments {
       doc.endsWith(".amm.sc.scala")
     def isAmmoniteScript: Boolean =
       isScalaScript && !isWorksheet && !doc.endsWith("/build.sc")
+    def isMill: Boolean =
+      doc.endsWith("/build.sc")
     def asSymbol: Symbol = Symbol(doc)
     def endsWithAt(value: String, offset: Int): Boolean = {
       val start = offset - value.length
@@ -483,6 +485,10 @@ trait CommonMtagsEnrichments {
       }
     def isBuild: Boolean =
       path.filename.startsWith("BUILD")
+
+    def isBsp: Boolean =
+      path.filename.startsWith(".bsp")
+
     def isScalaOrJava: Boolean = {
       toLanguage match {
         case Language.SCALA | Language.JAVA => true
@@ -501,8 +507,9 @@ trait CommonMtagsEnrichments {
     def isScalaScript: Boolean = {
       filename.endsWith(".sc")
     }
+    def isMill: Boolean = isScalaScript && filename == "build.sc"
     def isAmmoniteScript: Boolean =
-      isScalaScript && !isWorksheet && filename != "build.sc"
+      isScalaScript && !isWorksheet && !isMill
     def isWorksheet: Boolean = {
       filename.endsWith(".worksheet.sc")
     }
@@ -530,6 +537,19 @@ trait CommonMtagsEnrichments {
       val file = path.toURI.toString()
       Input.VirtualFile(file, text)
     }
+
+    def jarPath: Option[AbsolutePath] = {
+      val filesystem = path.toNIO.getFileSystem()
+      if (filesystem.provider().getScheme().equals("jar")) {
+        Some(
+          AbsolutePath(
+            Paths.get(filesystem.toString)
+          )
+        )
+      } else {
+        None
+      }
+    }
   }
 
   implicit class XtensionJavaPriorityQueue[A](q: util.PriorityQueue[A]) {
@@ -546,7 +566,7 @@ trait CommonMtagsEnrichments {
   }
 
   implicit class XtensionSymbolInformation(kind: s.SymbolInformation.Kind) {
-    def toLSP: l.SymbolKind =
+    def toLsp: l.SymbolKind =
       kind match {
         case k.LOCAL => l.SymbolKind.Variable
         case k.FIELD => l.SymbolKind.Field

@@ -9,6 +9,7 @@ import scala.collection.mutable
 import scala.language.implicitConversions
 import scala.reflect.internal.util.Position
 import scala.reflect.internal.util.ScriptSourceFile
+import scala.reflect.internal.util.SourceFile
 import scala.reflect.internal.{Flags => gf}
 import scala.tools.nsc.Mode
 import scala.tools.nsc.Settings
@@ -48,6 +49,9 @@ class MetalsGlobal(
     with completions.ScaladocCompletions
     with completions.TypeCompletions
     with completions.OverrideCompletions
+    with completions.ScalaCliCompletions
+    with completions.MillIvyCompletions
+    with completions.SbtLibCompletions
     with Signatures
     with Compat
     with GlobalProxy
@@ -541,6 +545,14 @@ class MetalsGlobal(
     onUnitOf(pos.source) { unit => new MetalsLocator(pos).locateIn(unit.body) }
   }
 
+  def locateTree(
+      pos: Position,
+      tree: Tree,
+      acceptTransparent: Boolean
+  ): Tree = {
+    new MetalsLocator(pos, acceptTransparent).locateIn(tree)
+  }
+
   def locateUntyped(pos: Position): Tree = {
     onUnitOf(pos.source) { unit =>
       new MetalsLocator(pos).locateIn(parseTree(unit.source))
@@ -614,7 +626,7 @@ class MetalsGlobal(
       pos.point > other.point
     }
 
-    def toLSP: l.Range = {
+    def toLsp: l.Range = {
       if (pos.isRange) {
         new l.Range(toPos(pos.start), toPos(pos.end))
       } else {
@@ -657,11 +669,47 @@ class MetalsGlobal(
      */
     def namePos: Position = {
       val start = defn.pos.point
-      val end = start + defn.name.length() - 1
+      val end = start + defn.name.dropLocal.decoded.length()
       Position.range(defn.pos.source, start, start, end)
     }
 
   }
+
+  implicit class XtensionNameTreeMetals(sel: NameTreeApi) {
+
+    /**
+     * Returns the position of the name/identifier of this select.
+     */
+    def namePos: Position = {
+      val start = sel.pos.point
+      val end = start + sel.name.getterName.decoded.trim.length()
+      Position.range(sel.pos.source, start, start, end)
+    }
+
+  }
+
+  implicit class XtensionImportSelectorMetals(sel: ImportSelector) {
+
+    /**
+     * Returns the position of the name/identifier of this import selector.
+     */
+    def namePosition(source: SourceFile): Position = {
+      val start = sel.namePos
+      val end = start + sel.name.getterName.decoded.trim.length()
+      Position.range(source, start, start, end)
+    }
+
+    /**
+     * Returns the position of the rename of this import selector.
+     */
+    def renamePosition(source: SourceFile): Position = {
+      val start = sel.renamePos
+      val end = start + sel.rename.getterName.decoded.trim.length()
+      Position.range(source, start, start, end)
+    }
+
+  }
+
   implicit class XtensionSymbolMetals(sym: Symbol) {
     def foreachKnownDirectSubClass(fn: Symbol => Unit): Unit = {
       // NOTE(olafur) The logic in this method is fairly involved because `knownDirectSubClasses`
@@ -676,6 +724,7 @@ class MetalsGlobal(
             isVisited += unique
             if (child.name.containsName(CURSOR)) ()
             else if (child.isStale) ()
+            else if (child.name == tpnme.LOCAL_CHILD) ()
             else if (child.isSealed && (child.isAbstract || child.isTrait)) {
               loop(child)
             } else {

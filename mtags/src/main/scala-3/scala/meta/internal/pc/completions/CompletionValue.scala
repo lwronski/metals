@@ -20,79 +20,68 @@ import org.eclipse.lsp4j.TextEdit
 sealed trait CompletionValue:
   def label: String
   def insertText: Option[String] = None
-  def snippetSuffix: Option[String] = None
+  def snippetSuffix: CompletionSuffix = CompletionSuffix.empty
   def additionalEdits: List[TextEdit] = Nil
   def range: Option[Range] = None
   def filterText: Option[String] = None
+  def completionItemKind(using Context): CompletionItemKind
+  def description(printer: MetalsPrinter)(using Context): String = ""
 
-  final def completionItemKind(using Context): CompletionItemKind =
-    this match
-      case _: CompletionValue.Keyword => CompletionItemKind.Keyword
-      case _: CompletionValue.Document => CompletionItemKind.Snippet
-      case _: CompletionValue.NamedArg => CompletionItemKind.Field
-      case _: CompletionValue.Override => CompletionItemKind.Method
-      case _: CompletionValue.Extension => CompletionItemKind.Method
-      case _: CompletionValue.Autofill => CompletionItemKind.Enum
-      case v: (CompletionValue.Compiler | CompletionValue.Workspace |
-            CompletionValue.Scope | CompletionValue.Interpolator) =>
-        val symbol = v.symbol
-        if symbol.is(Package) || symbol.is(Module) then
-          // No CompletionItemKind.Package (https://github.com/Microsoft/language-server-protocol/issues/155)
-          CompletionItemKind.Module
-        else if symbol.isConstructor then CompletionItemKind.Constructor
-        else if symbol.isClass then CompletionItemKind.Class
-        else if symbol.is(Mutable) then CompletionItemKind.Variable
-        else if symbol.is(Method) then CompletionItemKind.Method
-        else CompletionItemKind.Field
-      case _: CompletionValue.FileSystemMember => CompletionItemKind.File
-  end completionItemKind
-
-  final def lspTags(using Context): List[CompletionItemTag] =
-    forSymOnly(
-      sym =>
-        if sym.isDeprecated then List(CompletionItemTag.Deprecated) else Nil,
-      Nil,
-    )
-
-  final def description(printer: MetalsPrinter)(using Context): String =
-    this match
-      case _: CompletionValue.Override =>
-        "" // Override doesn't need description as it already has full signature in label
-      case ext: CompletionValue.Extension =>
-        s"${printer.completionSymbol(ext.symbol)} (extension)"
-      case interpolator: CompletionValue.Interpolator
-          if interpolator.isExtension =>
-        s"${printer.completionSymbol(interpolator.symbol)} (extension)"
-      case so: CompletionValue.Symbolic =>
-        printer.completionSymbol(so.symbol)
-      case CompletionValue.NamedArg(label, tpe) =>
-        printer.tpe(tpe)
-      case CompletionValue.Document(_, _, desc) => desc
-      case _ => ""
-
-  private def forSymOnly[A](f: Symbol => A, orElse: => A): A =
-    this match
-      case v: CompletionValue.Symbolic => f(v.symbol)
-      case _ => orElse
-
+  /**
+   * Label with potentially attached description.
+   */
+  def labelWithDescription(printer: MetalsPrinter)(using Context): String =
+    label
+  def lspTags(using Context): List[CompletionItemTag] = Nil
 end CompletionValue
 
 object CompletionValue:
 
   sealed trait Symbolic extends CompletionValue:
     def symbol: Symbol
+    def isFromWorkspace: Boolean = false
+
+    def completionItemKind(using Context): CompletionItemKind =
+      val symbol = this.symbol
+      if symbol.is(Package) || symbol.is(Module) then
+        // No CompletionItemKind.Package (https://github.com/Microsoft/language-server-protocol/issues/155)
+        CompletionItemKind.Module
+      else if symbol.isConstructor then CompletionItemKind.Constructor
+      else if symbol.isClass then CompletionItemKind.Class
+      else if symbol.is(Mutable) then CompletionItemKind.Variable
+      else if symbol.is(Method) then CompletionItemKind.Method
+      else CompletionItemKind.Field
+
+    override def lspTags(using Context): List[CompletionItemTag] =
+      if symbol.isDeprecated then List(CompletionItemTag.Deprecated) else Nil
+
+    override def labelWithDescription(
+        printer: MetalsPrinter
+    )(using Context): String =
+      if symbol.is(Method) then s"${label}${description(printer)}"
+      else if symbol.isConstructor then label
+      else if symbol.is(Mutable) then s"${label}: ${description(printer)}"
+      else if symbol.is(Package) || symbol.is(Module) || symbol.isClass then
+        if isFromWorkspace then s"${label} -${description(printer)}"
+        else s"${label}${description(printer)}"
+      else s"${label}: ${description(printer)}"
+
+    override def description(printer: MetalsPrinter)(using Context): String =
+      printer.completionSymbol(symbol)
+  end Symbolic
 
   case class Compiler(
       label: String,
       symbol: Symbol,
-      override val snippetSuffix: Option[String],
+      override val snippetSuffix: CompletionSuffix,
   ) extends Symbolic
   case class Scope(label: String, symbol: Symbol) extends Symbolic
   case class Workspace(
       label: String,
       symbol: Symbol,
-      override val snippetSuffix: Option[String],
-  ) extends Symbolic
+      override val snippetSuffix: CompletionSuffix,
+  ) extends Symbolic:
+    override def isFromWorkspace: Boolean = true
 
   /**
    * CompletionValue for extension methods via SymbolSearch
@@ -100,8 +89,12 @@ object CompletionValue:
   case class Extension(
       label: String,
       symbol: Symbol,
-      override val snippetSuffix: Option[String],
-  ) extends Symbolic
+      override val snippetSuffix: CompletionSuffix,
+  ) extends Symbolic:
+    override def completionItemKind(using Context): CompletionItemKind =
+      CompletionItemKind.Method
+    override def description(printer: MetalsPrinter)(using Context): String =
+      s"${printer.completionSymbol(symbol)} (extension)"
 
   /**
    * @param shortenedNames shortened type names by `Printer`. This field should be used for autoImports
@@ -119,18 +112,37 @@ object CompletionValue:
       override val filterText: Option[String],
       start: Int,
   ) extends Symbolic:
+    override def completionItemKind(using Context): CompletionItemKind =
+      CompletionItemKind.Method
+    override def labelWithDescription(printer: MetalsPrinter)(using
+        Context
+    ): String = label
   end Override
 
   case class NamedArg(
       label: String,
       tpe: Type,
-  ) extends CompletionValue
+  ) extends CompletionValue:
+    override def completionItemKind(using Context): CompletionItemKind =
+      CompletionItemKind.Field
+    override def description(printer: MetalsPrinter)(using Context): String =
+      ": " + printer.tpe(tpe)
+
+    override def labelWithDescription(printer: MetalsPrinter)(using
+        Context
+    ): String = label
+
   case class Autofill(
       value: String
   ) extends CompletionValue:
+    override def completionItemKind(using Context): CompletionItemKind =
+      CompletionItemKind.Enum
     override def label: String = "Autofill with default values"
+
   case class Keyword(label: String, override val insertText: Option[String])
-      extends CompletionValue
+      extends CompletionValue:
+    override def completionItemKind(using Context): CompletionItemKind =
+      CompletionItemKind.Keyword
 
   case class FileSystemMember(
       filename: String,
@@ -139,6 +151,17 @@ object CompletionValue:
   ) extends CompletionValue:
     override def label: String = filename
     override def insertText: Option[String] = Some(filename.stripSuffix(".sc"))
+    override def completionItemKind(using Context): CompletionItemKind =
+      CompletionItemKind.File
+
+  case class ScalaCLiImport(
+      label: String,
+      override val insertText: Option[String],
+      override val range: Option[Range],
+  ) extends CompletionValue:
+    override val filterText: Option[String] = insertText
+    override def completionItemKind(using Context): CompletionItemKind =
+      CompletionItemKind.Folder
 
   case class Interpolator(
       symbol: Symbol,
@@ -149,10 +172,45 @@ object CompletionValue:
       override val filterText: Option[String],
       isWorkspace: Boolean = false,
       isExtension: Boolean = false,
-  ) extends Symbolic
+  ) extends Symbolic:
+    override def description(printer: MetalsPrinter)(using Context): String =
+      if isExtension then s"${printer.completionSymbol(symbol)} (extension)"
+      else super.description(printer)
+
+  case class MatchCompletion(
+      label: String,
+      override val insertText: Option[String],
+      override val additionalEdits: List[TextEdit],
+      desc: String,
+  ) extends CompletionValue:
+    override def completionItemKind(using Context): CompletionItemKind =
+      CompletionItemKind.Enum
+    override def description(printer: MetalsPrinter)(using Context): String =
+      desc
+
+  case class CaseKeyword(
+      symbol: Symbol,
+      label: String,
+      override val insertText: Option[String],
+      override val additionalEdits: List[TextEdit],
+      override val range: Option[Range] = None,
+      val command: Option[String] = None,
+  ) extends Symbolic:
+    override def completionItemKind(using Context): CompletionItemKind =
+      CompletionItemKind.Method
+
+    override def labelWithDescription(printer: MetalsPrinter)(using
+        Context
+    ): String = label
+  end CaseKeyword
 
   case class Document(label: String, doc: String, description: String)
-      extends CompletionValue
+      extends CompletionValue:
+    override def completionItemKind(using Context): CompletionItemKind =
+      CompletionItemKind.Snippet
+
+    override def description(printer: MetalsPrinter)(using Context): String =
+      description
 
   def namedArg(label: String, sym: Symbol)(using
       Context

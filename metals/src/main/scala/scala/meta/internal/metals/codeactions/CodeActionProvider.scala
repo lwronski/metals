@@ -1,11 +1,12 @@
-package scala.meta.internal.metals
+package scala.meta.internal.metals.codeactions
 
 import scala.collection.JavaConverters._
 import scala.concurrent.ExecutionContext
 import scala.concurrent.Future
 
+import scala.meta.internal.metals._
 import scala.meta.internal.metals.clients.language.MetalsLanguageClient
-import scala.meta.internal.metals.codeactions._
+import scala.meta.internal.metals.codeactions.CodeAction
 import scala.meta.internal.parsing.Trees
 import scala.meta.pc.CancelToken
 
@@ -21,12 +22,14 @@ final class CodeActionProvider(
     languageClient: MetalsLanguageClient,
 )(implicit ec: ExecutionContext) {
 
-  private val extractMemberAction = new ExtractRenameMember(trees)
+  private val extractMemberAction =
+    new ExtractRenameMember(trees, languageClient)
 
   private val allActions: List[CodeAction] = List(
     new ImplementAbstractMembers(compilers),
-    new ImportMissingSymbol(compilers),
+    new ImportMissingSymbol(compilers, buildTargets),
     new CreateNewSymbol(),
+    new ActionableDiagnostic(),
     new StringActions(buffers),
     extractMemberAction,
     new SourceOrganizeImports(
@@ -40,42 +43,51 @@ final class CodeActionProvider(
       buildTargets,
       diagnostics,
     ),
-    new InsertInferredType(trees),
+    new InsertInferredType(trees, compilers, languageClient),
     new PatternMatchRefactor(trees),
     new RewriteBracesParensCodeAction(trees),
     new ExtractValueCodeAction(trees, buffers),
     new CreateCompanionObjectCodeAction(trees, buffers),
-    new ConvertToNamedArguments(trees),
+    new ExtractMethodCodeAction(trees, compilers, languageClient),
+    new ConvertToNamedArguments(trees, compilers, languageClient),
     new FlatMapToForComprehensionCodeAction(trees, buffers),
+    new MillifyDependencyCodeAction(buffers),
   )
 
   def codeActions(
       params: l.CodeActionParams,
       token: CancelToken,
   )(implicit ec: ExecutionContext): Future[Seq[l.CodeAction]] = {
+    val requestedKinds = Option(params.getContext.getOnly).map(_.asScala.toList)
+
     def isRequestedKind(action: CodeAction): Boolean =
-      Option(params.getContext.getOnly) match {
+      requestedKinds match {
         case Some(only) =>
-          only.asScala.toSet.exists(requestedKind =>
-            action.kind.startsWith(requestedKind)
-          )
+          only.exists(requestedKind => action.kind.startsWith(requestedKind))
         case None => true
       }
 
     val actions = allActions.collect {
-      case action if isRequestedKind(action) => action.contribute(params, token)
+      case action if isRequestedKind(action) =>
+        action.contribute(params, token)
     }
 
     Future.sequence(actions).map(_.flatten)
   }
 
   def executeCommands(
-      codeActionCommandData: CodeActionCommandData
-  ): Future[CodeActionCommandResult] = {
-    codeActionCommandData match {
-      case data: ExtractMemberDefinitionData =>
-        extractMemberAction.executeCommand(data)
-      case data => Future.failed(new IllegalArgumentException(data.toString))
-    }
+      params: l.ExecuteCommandParams,
+      token: CancelToken,
+  ): Future[Unit] = {
+    val running = for {
+      action <- allActions
+      actionCommand <- action.command
+      data <- actionCommand.unapply(params)
+    } yield action.handleCommand(data, token)
+    Future.sequence(running).map(_ => ())
   }
+
+  val allActionCommandsIds: Set[String] =
+    allActions.flatMap(_.command).map(_.id).toSet
+
 }

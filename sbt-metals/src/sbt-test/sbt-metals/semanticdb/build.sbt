@@ -26,13 +26,18 @@ lazy val b = project
     inConfig(Test) { checkSemanticdb := assertSemanticdbForScala3.value },
   )
 
-// not supported scala version
+// scala 2.12
 lazy val c = project
   .in(file("c"))
   .settings(
-    scalaVersion := "2.12.7",
-    inConfig(Compile) { checkSemanticdb := assertSemanticdbDisabled.value },
-    inConfig(Compile) { checkSemanticdb := assertSemanticdbDisabled.value },
+    scalaVersion := "2.12.17",
+    inConfig(Compile) {
+      checkSemanticdb := {
+        assertSemanticdbForScala2.value
+        compile.value
+      }
+    },
+    inConfig(Test) { checkSemanticdb := assertSemanticdbForScala2.value },
   )
 
 // bsp disabled

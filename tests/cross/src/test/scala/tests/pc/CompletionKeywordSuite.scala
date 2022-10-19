@@ -187,50 +187,6 @@ class CompletionKeywordSuite extends BaseCompletionSuite {
   )
 
   check(
-    "match",
-    """
-      |package foo
-      |
-      |object A {
-      |  val x: Option[Int] = ???
-      |  val a = {
-      |    x ma@@
-      |  }
-      |}
-      |""".stripMargin,
-    """|match
-       |""".stripMargin,
-    filter = _ == "match",
-  )
-
-  checkEdit(
-    "match-edit".tag(IgnoreScala2),
-    """
-      |package foo
-      |
-      |object A {
-      |  val abc: Option[Int] = ???
-      |  val a = {
-      |    abc ma@@
-      |  }
-      |}
-      |""".stripMargin,
-    s"""
-       |package foo
-       |
-       |object A {
-       |  val abc: Option[Int] = ???
-       |  val a = {
-       |    abc match
-       |\tcase $$0
-       |
-       |  }
-       |}
-       |""".stripMargin,
-    filter = _ == "match",
-  )
-
-  check(
     "given-def",
     """
       |package foo
@@ -290,6 +246,8 @@ class CompletionKeywordSuite extends BaseCompletionSuite {
       |""".stripMargin,
     """|return
        |""".stripMargin,
+    // methods add in 3.2.1
+    filter = item => !item.contains("retains"),
   )
 
   check(
@@ -302,6 +260,8 @@ class CompletionKeywordSuite extends BaseCompletionSuite {
       |}
       |""".stripMargin,
     "",
+    // methods add in 3.2.1
+    filter = item => !item.contains("retains"),
   )
 
   check(
@@ -319,6 +279,8 @@ class CompletionKeywordSuite extends BaseCompletionSuite {
     compat = Map(
       "3" -> ""
     ),
+    // methods add in 3.2.1
+    filter = item => !item.contains("retains"),
   )
 
   check(
@@ -329,6 +291,8 @@ class CompletionKeywordSuite extends BaseCompletionSuite {
       |ret@@
       |""".stripMargin,
     "",
+    // methods add in 3.2.1
+    filter = item => !item.contains("retains"),
   )
 
   check(
@@ -427,7 +391,9 @@ class CompletionKeywordSuite extends BaseCompletionSuite {
     // to avoid newMain annotation
     filter = str => !str.contains("newMain"),
   )
-
+  // TODO: Should provide empty completions
+  // The issue is that the tree looks the same as for `case @@` (it doesn't see `new`)
+  // Issue: https://github.com/scalameta/metals/issues/4367
   check(
     "new-pattern",
     """
@@ -442,6 +408,11 @@ class CompletionKeywordSuite extends BaseCompletionSuite {
     "",
     // to avoid newMain annotation
     filter = str => !str.contains("newMain"),
+    compat = Map(
+      "3" ->
+        """|head :: next scala.collection.immutable
+           |Nil scala.collection.immutable""".stripMargin
+    ),
   )
 
   check(
@@ -549,6 +520,122 @@ class CompletionKeywordSuite extends BaseCompletionSuite {
        |  def hello(a: String, u@@)
        |}""".stripMargin,
     "",
+  )
+
+  check(
+    "extends-class",
+    """
+      |package foo
+      |
+      |class Foo ext@@
+    """.stripMargin,
+    """|extends
+       |""".stripMargin,
+    compat = Map(
+      "3" ->
+        """|extension
+           |extends
+           |""".stripMargin
+    ),
+  )
+
+  check(
+    "extends-obj",
+    """
+      |package foo
+      |
+      |object Foo ext@@
+    """.stripMargin,
+    """|extends
+       |""".stripMargin,
+    compat = Map(
+      "3" ->
+        """|extension
+           |extends
+           |""".stripMargin
+    ),
+  )
+
+  check(
+    "extends-trait",
+    """
+      |package foo
+      |
+      |trait Foo ext@@ {}
+    """.stripMargin,
+    """|extends
+       |""".stripMargin,
+    compat = Map(
+      "3" ->
+        """|extension
+           |extends
+           |""".stripMargin
+    ),
+  )
+
+  check(
+    "extends-with-constructor",
+    """
+      |package foo
+      |
+      |class Foo(x: Int) ext@@
+    """.stripMargin,
+    """|extends
+       |""".stripMargin,
+    compat = Map(
+      "3" ->
+        """|extension
+           |extends
+           |""".stripMargin
+    ),
+  )
+
+  check(
+    "no-extends",
+    """
+      |package foo
+      |
+      |object Main {
+      |  def main = {
+      |    foo.ext@@
+      |  }
+      |}
+    """.stripMargin,
+    "",
+  )
+
+  check(
+    "no-extends-paren",
+    """
+      |package foo
+      |
+      |object Main {
+      |  def main = {
+      |    foo(i) ex@@
+      |  }
+      |}
+    """.stripMargin,
+    "",
+  )
+
+  check(
+    "extends-limitation",
+    """
+      |package foo
+      |
+      |// can't provide extends keyword completion if there's newline between class
+      |// because the completion engine tokenize only the line 
+      |class Main
+      |  exten@@
+    """.stripMargin,
+    "",
+    compat =
+      Map( // it works in Scala3 because `completionPos.cursorPos` gives us a `class Main\n exten`
+        "3" ->
+          """|extension
+             |extends
+             |""".stripMargin
+      ),
   )
 
 }

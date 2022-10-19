@@ -16,6 +16,7 @@ import scala.meta.pc.SymbolSearch
 
 import dotty.tools.dotc.Driver
 import dotty.tools.dotc.ast.tpd.*
+import dotty.tools.dotc.ast.untpd
 import dotty.tools.dotc.core.Contexts.*
 import dotty.tools.dotc.core.Denotations.*
 import dotty.tools.dotc.core.Flags.*
@@ -28,6 +29,7 @@ import dotty.tools.dotc.interactive.Interactive
 import dotty.tools.dotc.interactive.InteractiveDriver
 import dotty.tools.dotc.util.SourcePosition
 import dotty.tools.dotc.util.Spans
+import dotty.tools.dotc.util.Spans.Span
 import org.eclipse.lsp4j.MarkupContent
 import org.eclipse.{lsp4j as l}
 
@@ -88,7 +90,7 @@ object MtagsEnrichments extends CommonMtagsEnrichments:
       val column = offset - lineStartOffest
       new l.Position(line, column)
 
-    def toLSP: l.Range =
+    def toLsp: l.Range =
       new l.Range(
         offsetToPos(pos.start),
         offsetToPos(pos.end),
@@ -106,18 +108,30 @@ object MtagsEnrichments extends CommonMtagsEnrichments:
     def toLocation: Option[l.Location] =
       for
         uri <- InteractiveDriver.toUriOption(pos.source)
-        range <- if pos.exists then Some(pos.toLSP) else None
+        range <- if pos.exists then Some(pos.toLsp) else None
       yield new l.Location(uri.toString, range)
+
+    def encloses(other: SourcePosition): Boolean =
+      pos.start <= other.start && pos.end >= other.end
+
+    def encloses(other: RangeParams): Boolean =
+      pos.start <= other.offset() && pos.end >= other.endOffset()
   end extension
 
+  extension (pos: RangeParams)
+    def encloses(other: SourcePosition): Boolean =
+      pos.offset() <= other.start && pos.endOffset() >= other.end
+
   extension (sym: Symbol)(using Context)
-    def fullNameBackticked: String =
+    def fullNameBackticked: String = fullNameBackticked(Set.empty)
+
+    def fullNameBackticked(exclusions: Set[String]): String =
       @tailrec
       def loop(acc: List[String], sym: Symbol): List[String] =
         if sym == NoSymbol || sym.isRoot || sym.isEmptyPackage then acc
         else if sym.isPackageObject then loop(acc, sym.owner)
         else
-          val v = KeywordWrapper.Scala3.backtickWrap(sym.decodedName)
+          val v = this.nameBackticked(sym)(exclusions)
           loop(v :: acc, sym.owner)
       loop(Nil, sym).mkString(".")
 
@@ -126,8 +140,10 @@ object MtagsEnrichments extends CommonMtagsEnrichments:
     def companion: Symbol =
       if sym.is(Module) then sym.companionClass else sym.companionModule
 
-    def nameBackticked: String =
-      KeywordWrapper.Scala3.backtickWrap(sym.decodedName)
+    def nameBackticked: String = nameBackticked(Set.empty)
+
+    def nameBackticked(exclusions: Set[String]): String =
+      KeywordWrapper.Scala3.backtickWrap(sym.decodedName, exclusions)
 
     def withUpdatedTpe(tpe: Type): Symbol =
       val upd = sym.copy(info = tpe)
@@ -144,6 +160,18 @@ object MtagsEnrichments extends CommonMtagsEnrichments:
       upd.rawParamss = paramsWithFlags
       upd
     end withUpdatedTpe
+
+    // Returns true if this symbol is locally defined from an old version of the source file.
+    def isStale: Boolean =
+      sym.sourcePos.span.exists && {
+        val source = ctx.source
+        if source ne sym.source then
+          !source.content.startsWith(
+            sym.decodedName.toString(),
+            sym.sourcePos.span.point,
+          )
+        else false
+      }
   end extension
 
   extension (name: Name)(using Context)
@@ -189,6 +217,11 @@ object MtagsEnrichments extends CommonMtagsEnrichments:
         (denot.info, sym.withUpdatedTpe(denot.info))
       catch case NonFatal(e) => (sym.info, sym)
   end extension
+
+  extension (imp: Import)
+    def selector(span: Span)(using Context): Option[Symbol] =
+      for sel <- imp.selectors.find(_.span.contains(span))
+      yield imp.expr.symbol.info.member(sel.name).symbol
 
   extension (denot: Denotation)
     def allSymbols: List[Symbol] =

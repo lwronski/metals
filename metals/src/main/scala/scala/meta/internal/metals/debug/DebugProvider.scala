@@ -20,6 +20,7 @@ import scala.util.control.NonFatal
 
 import scala.meta.internal.metals.BuildServerConnection
 import scala.meta.internal.metals.BuildTargets
+import scala.meta.internal.metals.Cancelable
 import scala.meta.internal.metals.ClientCommands
 import scala.meta.internal.metals.ClientConfiguration
 import scala.meta.internal.metals.Compilations
@@ -35,6 +36,7 @@ import scala.meta.internal.metals.Messages
 import scala.meta.internal.metals.Messages.UnresolvedDebugSessionParams
 import scala.meta.internal.metals.MetalsBuildClient
 import scala.meta.internal.metals.MetalsEnrichments._
+import scala.meta.internal.metals.MutableCancelable
 import scala.meta.internal.metals.ScalaTestSuites
 import scala.meta.internal.metals.ScalaTestSuitesDebugRequest
 import scala.meta.internal.metals.ScalaVersionSelector
@@ -84,9 +86,13 @@ class DebugProvider(
     semanticdbs: Semanticdbs,
     compilers: Compilers,
     statusBar: StatusBar,
-) {
+) extends Cancelable {
 
   import DebugProvider._
+
+  private val debugSessions = new MutableCancelable()
+
+  override def cancel(): Unit = debugSessions.cancel()
 
   lazy val buildTargetClassesFinder = new BuildTargetClassesFinder(
     buildTargets,
@@ -185,7 +191,11 @@ class DebugProvider(
     }
     val server = new DebugServer(sessionName, uri, proxyFactory)
 
-    server.listen.andThen { case _ => proxyServer.close() }
+    debugSessions.add(server)
+    server.listen.andThen { case _ =>
+      proxyServer.close()
+      debugSessions.remove(server)
+    }
 
     connectedToServer.future.map(_ => server)
   }
@@ -231,6 +241,18 @@ class DebugProvider(
     buildTargets.buildServerOf(targetId).exists(_.supportsTestSelection)
   }
 
+  private def envFromFile(
+      envFile: Option[String]
+  )(implicit ec: ExecutionContext): Future[List[String]] =
+    envFile
+      .map { file =>
+        val path = AbsolutePath(file)(workspace)
+        DotEnvFileParser
+          .parse(path)
+          .map(_.map { case (key, value) => s"$key=$value" }.toList)
+      }
+      .getOrElse(Future.successful(List.empty))
+
   private def createMainParams(
       main: ScalaMainClass,
       target: BuildTargetIdentifier,
@@ -243,18 +265,7 @@ class DebugProvider(
     main.setJvmOptions(
       jvmOptions.getOrElse(ju.Collections.emptyList())
     )
-
-    val envFromFile: Future[List[String]] =
-      envFile
-        .map { file =>
-          val path = AbsolutePath(file)(workspace)
-          DotEnvFileParser
-            .parse(path)
-            .map(_.map { case (key, value) => s"$key=$value" }.toList)
-        }
-        .getOrElse(Future.successful(List.empty))
-
-    envFromFile.map { envFromFile =>
+    envFromFile(envFile).map { envFromFile =>
       main.setEnvironmentVariables((envFromFile ::: env).asJava)
       new b.DebugSessionParams(
         singletonList(target),
@@ -275,8 +286,7 @@ class DebugProvider(
       classes: List[ScalaMainClass],
       params: DebugDiscoveryParams,
   )(implicit ec: ExecutionContext): Future[DebugSessionParams] = {
-    val env =
-      if (params.env != null) createEnvList(params.env) else Nil
+    val env = Option(params.env).toList.flatMap(createEnvList)
 
     classes match {
       case Nil =>
@@ -476,7 +486,7 @@ class DebugProvider(
           )
         }
 
-        val env = if (params.env != null) createEnvList(params.env) else Nil
+        val env = Option(params.env).toList.flatMap(createEnvList)
         createMainParams(
           clazz,
           target.getId(),
@@ -515,13 +525,22 @@ class DebugProvider(
             "test",
           )
         }
-        Future.successful(
+        val env = Option(params.env).toList.flatMap(createEnvList)
+
+        envFromFile(Option(params.envFile)).map { envFromFile =>
+          val scalaTestSuite = new b.ScalaTestSuites(
+            List(
+              new b.ScalaTestSuiteSelection(params.testClass, Nil.asJava)
+            ).asJava,
+            Option(params.jvmOptions).getOrElse(Nil.asJava),
+            (envFromFile ::: env).asJava,
+          )
           new b.DebugSessionParams(
             singletonList(target.getId()),
-            b.DebugSessionParamsDataKind.SCALA_TEST_SUITES,
-            singletonList(clazz).toJson,
+            b.DebugSessionParamsDataKind.SCALA_TEST_SUITES_SELECTION,
+            scalaTestSuite.toJson,
           )
-        )
+        }
       // should not really happen due to
       // `findMainClassAndItsBuildTarget` succeeding with non-empty list
       case Nil => Future.failed(new ju.NoSuchElementException(params.testClass))

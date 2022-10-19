@@ -84,7 +84,7 @@ final class RenameProvider(
             (isWorkspaceSymbol(occurence.symbol, definitionPath) ||
               findRenamedImportForSymbol(source, occurence.symbol).isDefined)
           range <- occurence.range
-        } yield range.toLSP
+        } yield range.toLsp
       }
     }
   }
@@ -293,7 +293,7 @@ final class RenameProvider(
       realName <- rng.inString(semanticDb.text)
       if occ.symbol == occurence.symbol &&
         withoutBacktick(realName) == withoutBacktick(renameName)
-    } yield new Location(uri, rng.toLSP)
+    } yield new Location(uri, rng.toLsp)
 
     val result = for {
       (occurence, semanticDb) <- symbolOccurrence
@@ -303,7 +303,7 @@ final class RenameProvider(
         occurence,
         rename.rename.value,
       )
-    } yield renamedOccurences :+ new Location(uri, rename.rename.pos.toLSP)
+    } yield renamedOccurences :+ new Location(uri, rename.rename.pos.toLsp)
     result.getOrElse(Nil)
   }
 
@@ -455,7 +455,7 @@ final class RenameProvider(
       rename <- renameOpt
       (occ, doc) <- definitionProvider.symbolOccurrence(
         source,
-        rename.name.pos.toLSP.getStart(),
+        rename.name.pos.toLsp.getStart(),
       )
 
     } yield (occ.copy(range = Some(rename.rename.pos.toSemanticdb)), doc)
@@ -469,7 +469,7 @@ final class RenameProvider(
     // make sure it's not just a rename with the same base name
     def isCorrectSymbolOcccurrence(rename: Importee.Rename) = {
       definitionProvider
-        .symbolOccurrence(source, rename.name.pos.toLSP.getStart())
+        .symbolOccurrence(source, rename.name.pos.toLsp.getStart())
         .exists { case (occ, _) => occ.symbol == symbol }
     }
     def findRename(tree: Tree): Option[Importee.Rename] = {
@@ -518,24 +518,36 @@ final class RenameProvider(
       symbol: String,
   ): Option[s.Range] = {
     val name = range.inString(text)
-    val symbolName = symbol.desc.name
+    val nameString = symbol.desc.name.toString()
+    val isExplicitVarSetter =
+      name.exists(nm => nm.endsWith("_=") || nm.endsWith("_=`"))
     val isBackticked = name.exists(_.isBackticked)
+
+    val symbolName =
+      if (!isExplicitVarSetter) nameString.stripSuffix("_=")
+      else nameString
     val realName =
       if (isBackticked)
         name.map(_.stripBackticks)
       else name
-    if (symbol.isLocal || realName.contains(symbolName.toString)) {
+
+    if (symbol.isLocal || realName.contains(symbolName)) {
       /* We don't want to remove anything that is backticked, as we don't
        * know whether it's actuall needed (could be a pattern match). Here
        * we make sure that the backticks are not added twice.
        */
-      val realRange = if (isBackticked && !newName.isBackticked) {
+      val withoutBacktick = if (isBackticked && !newName.isBackticked) {
         range
           .withStartCharacter(range.startCharacter + 1)
           .withEndCharacter(range.endCharacter - 1)
       } else {
         range
       }
+
+      val realRange =
+        if (isExplicitVarSetter && !newName.endsWith("_="))
+          withoutBacktick.withEndCharacter(withoutBacktick.endCharacter - 2)
+        else withoutBacktick
       Some(realRange)
     } else {
       scribe.warn(s"Name doesn't match for $symbolName at $range")

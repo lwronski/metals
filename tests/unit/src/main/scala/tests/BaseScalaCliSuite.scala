@@ -101,35 +101,12 @@ abstract class BaseScalaCliSuite(scalaVersion: String)
        |}
        |
        |""".stripMargin
-
-  private def escape(s: String): String =
-    s.replace("\\", "\\\\")
   private def bspLayout =
     s"""/.bsp/scala-cli.json
-       |{
-       |  "name": "scala-cli",
-       |  "argv": [
-       |    "${escape(ScalaCli.javaCommand)}",
-       |    "-cp",
-       |    "${escape(ScalaCli.scalaCliClassPath().mkString(File.pathSeparator))}",
-       |    "${ScalaCli.scalaCliMainClass}",
-       |    "bsp",
-       |    "."
-       |  ],
-       |  "version": "${BuildInfo.scalaCliVersion}",
-       |  "bspVersion": "2.0.0",
-       |  "languages": [
-       |    "scala",
-       |    "java"
-       |  ]
-       |}
+       |${BaseScalaCliSuite.scalaCliBspJsonContent()}
        |
        |/.scala-build/ide-inputs.json
-       |{
-       |  "args": [
-       |    "."
-       |  ]
-       |}
+       |${BaseScalaCliSuite.scalaCliIdeInputJson(".")}
        |
        |""".stripMargin
 
@@ -164,35 +141,53 @@ abstract class BaseScalaCliSuite(scalaVersion: String)
     }
   }
 
+  private val simpleFileLayout =
+    s"""|/MyTests.scala
+        |//> using scala "$scalaVersion"
+        |//> using lib "com.lihaoyi::utest::0.7.9"
+        |//> using lib "com.lihaoyi::pprint::0.6.4"
+        |
+        |import foo.Foo
+        |import utest._
+        |
+        |object MyTests extends TestSuite {
+        |  pprint.log(2)
+        |  val tests = Tests {
+        |    test("foo") {
+        |      assert(2 + 2 == 4)
+        |    }
+        |    test("nope") {
+        |      assert(2 + 2 == (new Foo).value)
+        |    }
+        |  }
+        |}
+        |
+        |/foo.sc
+        |class Foo {
+        |  def value = 5
+        |}
+        |""".stripMargin
+
+  test("connecting-scalacli".flaky) {
+    cleanWorkspace()
+    for {
+      _ <- server.initialize()
+      _ <- server.initialized()
+      _ = FileLayout.fromString(simpleFileLayout, workspace)
+      _ = FileLayout.fromString(bspLayout, workspace)
+      _ <- server.server.indexingPromise.future
+      _ <- server.didOpen("MyTests.scala")
+      _ <- assertDefinitionAtLocation(
+        "MyTests.scala",
+        "val tests = Test@@s",
+        "utest/Tests.scala",
+      )
+    } yield ()
+  }
+
   def simpleFileTest(useBsp: Boolean): Future[Unit] =
     for {
-      _ <- scalaCliInitialize(useBsp)(
-        s"""/MyTests.scala
-           |//> using scala "$scalaVersion"
-           |//> using lib "com.lihaoyi::utest::0.7.9"
-           |//> using lib "com.lihaoyi::pprint::0.6.4"
-           |
-           |import foo.Foo
-           |import utest._
-           |
-           |object MyTests extends TestSuite {
-           |  pprint.log(2)
-           |  val tests = Tests {
-           |    test("foo") {
-           |      assert(2 + 2 == 4)
-           |    }
-           |    test("nope") {
-           |      assert(2 + 2 == (new Foo).value)
-           |    }
-           |  }
-           |}
-           |
-           |/foo.sc
-           |class Foo {
-           |  def value = 5
-           |}
-           |""".stripMargin
-      )
+      _ <- scalaCliInitialize(useBsp)(simpleFileLayout)
       _ <- server.didOpen("MyTests.scala")
       _ <- {
         if (useBsp) Future.unit
@@ -294,4 +289,73 @@ abstract class BaseScalaCliSuite(scalaVersion: String)
 
     } yield ()
 
+  test("relative-semanticdb-root") {
+    for {
+      _ <- scalaCliInitialize(useBsp = false)(
+        s"""/scripts/MyTests.scala
+           |//> using scala "$scalaVersion"
+           |//> using lib "com.lihaoyi::utest::0.7.9"
+           |//> using lib "com.lihaoyi::pprint::0.6.4"
+           |
+           |import foo.Foo
+           |import utest._
+           |
+           |object MyTests extends TestSuite {
+           |  pprint.log(2)
+           |  val tests = Tests {
+           |    test("foo") {
+           |      assert(2 + 2 == 4)
+           |    }
+           |    test("nope") {
+           |      assert(2 + 2 == (new Foo).value)
+           |    }
+           |  }
+           |}
+           |
+           |/scripts/foo.sc
+           |class Foo {
+           |  def value = 5
+           |}
+           |""".stripMargin
+      )
+      _ <- server.didOpen("scripts/MyTests.scala")
+      _ <- server.executeCommand(ServerCommands.StartScalaCliServer)
+
+      // via Scala CLI-generated Semantic DB, to a .sc file
+      _ <- assertDefinitionAtLocation(
+        "scripts/MyTests.scala",
+        "(new Fo@@o).value",
+        "scripts/foo.sc",
+        0,
+      )
+    } yield ()
+  }
+}
+
+object BaseScalaCliSuite {
+  def scalaCliBspJsonContent(args: List[String] = Nil): String = {
+    val argv = List(
+      ScalaCli.javaCommand,
+      "-cp",
+      ScalaCli.scalaCliClassPath().mkString(File.pathSeparator),
+      ScalaCli.scalaCliMainClass,
+      "bsp",
+      ".",
+    ) ++ args
+    val bsjJson = ujson.Obj(
+      "name" -> "scala-cli",
+      "argv" -> argv,
+      "version" -> BuildInfo.scalaCliVersion,
+      "bspVersion" -> "2.0.0",
+      "languages" -> List("scala", "java"),
+    )
+    ujson.write(bsjJson)
+  }
+
+  def scalaCliIdeInputJson(args: String*): String = {
+    val ideInputJson = ujson.Obj(
+      "args" -> args
+    )
+    ujson.write(ideInputJson)
+  }
 }

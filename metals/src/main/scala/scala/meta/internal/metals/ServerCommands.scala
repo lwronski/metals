@@ -6,6 +6,7 @@ import javax.annotation.Nullable
 import scala.meta.internal.metals.newScalaFile.NewFileTypes
 
 import ch.epfl.scala.{bsp4j => b}
+import org.eclipse.lsp4j
 import org.eclipse.lsp4j.Location
 import org.eclipse.lsp4j.TextDocumentIdentifier
 import org.eclipse.lsp4j.TextDocumentPositionParams
@@ -394,7 +395,7 @@ object ServerCommands {
     "Create new scala file",
     s"""|Create and open new Scala file.
         |
-        |The currently allowed Scala file types that ca be passed in are:
+        |The currently allowed Scala file types that can be passed in are:
         |
         | - ${NewFileTypes.ScalaFile.id} (${NewFileTypes.ScalaFile.label})
         | - ${NewFileTypes.Class.id} (${NewFileTypes.Class.label})
@@ -404,7 +405,7 @@ object ServerCommands {
         | - ${NewFileTypes.Trait.id} (${NewFileTypes.Trait.label})
         | - ${NewFileTypes.PackageObject.id} (${NewFileTypes.PackageObject.label})
         | - ${NewFileTypes.Worksheet.id} (${NewFileTypes.Worksheet.label})
-        | - ${NewFileTypes.AmmoniteScript.id} (${NewFileTypes.AmmoniteScript.label})
+        | - ${NewFileTypes.ScalaScript.id} (${NewFileTypes.ScalaScript.label})
         |
         |Note: requires 'metals/inputBox' capability from language client.
         |""".stripMargin,
@@ -474,6 +475,22 @@ object ServerCommands {
        |calculate the type and insert it in the correct location.
        |""".stripMargin,
     """|This command should be sent in with the LSP [`TextDocumentPositionParams`](https://microsoft.github.io/language-server-protocol/specifications/specification-current/#textDocumentPositionParams)
+       |""".stripMargin,
+  )
+  final case class ExtractMethodParams(
+      param: TextDocumentIdentifier,
+      range: lsp4j.Range,
+      extractPosition: lsp4j.Position,
+  )
+  val ExtractMethod = new ParametrizedCommand[ExtractMethodParams](
+    "extract-method",
+    "Extract method from range",
+    """|Whenever a user chooses code action to extract method, this command is later ran to
+       |calculate parameters for the newly created method and create its definition.
+       |""".stripMargin,
+    """|LSP [`TextDocumentIdentifier`], (https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocumentIdentifier), 
+       |LSP [`Range`], range of the code you'd like to extract as method,
+       |LSP [`Position`], position where the definition of extracted method will be created.
        |""".stripMargin,
   )
 
@@ -588,6 +605,7 @@ object ServerCommands {
       PresentationCompilerRestart,
       ResetChoicePopup,
       ResetNotifications,
+      ExtractMethod,
       RestartBuildServer,
       RunDoctor,
       RunScalafix,
@@ -602,6 +620,9 @@ object ServerCommands {
       StartScalaCliServer,
       StopScalaCliServer,
     )
+
+  val allIds: Set[String] = all.map(_.id).toSet
+
 }
 
 case class DebugUnresolvedMainClassParams(
@@ -632,6 +653,9 @@ final case class ScalaTestSuiteSelection(
 case class DebugUnresolvedTestClassParams(
     testClass: String,
     @Nullable buildTarget: String = null,
+    @Nullable jvmOptions: java.util.List[String] = null,
+    @Nullable env: java.util.Map[String, String] = null,
+    @Nullable envFile: String = null,
 )
 
 case class DebugUnresolvedAttachRemoteParams(

@@ -194,7 +194,7 @@ object MetalsInteractive:
           val classTree = funSym.topLevelClass.asClass.rootTree
           val paramSymbol =
             for
-              DefDef(_, paramss, _, _) <- tpd
+              case DefDef(_, paramss, _, _) <- tpd
                 .defPath(funSym, classTree)
                 .lastOption
               param <- paramss.flatten.find(_.name == name)
@@ -248,9 +248,14 @@ object MetalsInteractive:
             target.sourcePos.contains(pos) =>
         List((target.symbol, target.typeOpt))
 
-      case path @ head :: tl =>
+      case path @ head :: tail =>
         if head.symbol.is(Synthetic) then
-          enclosingSymbolsWithExpressionType(tl, pos, indexed, skipCheckOnName)
+          enclosingSymbolsWithExpressionType(
+            tail,
+            pos,
+            indexed,
+            skipCheckOnName,
+          )
         else if head.symbol != NoSymbol then
           if skipCheckOnName ||
             MetalsInteractive.isOnName(
@@ -259,12 +264,18 @@ object MetalsInteractive:
               indexed.ctx.source,
             )
           then List((head.symbol, head.typeOpt))
+          /* Type tree for List(1) has an Int type variable, which has span
+           * but doesn't exist in code.
+           * https://github.com/lampepfl/dotty/issues/15937
+           */
+          else if head.isInstanceOf[TypeTree] then
+            enclosingSymbolsWithExpressionType(tail, pos, indexed)
           else Nil
         else
           val recovered = recoverError(head, indexed)
           if recovered.isEmpty then
             enclosingSymbolsWithExpressionType(
-              tl,
+              tail,
               pos,
               indexed,
               skipCheckOnName,
@@ -300,4 +311,13 @@ object MetalsInteractive:
       case Apply(TypeApply(select: Select, _), _) => select
     }
   end ApplySelect
+
+  object TreeApply:
+    def unapply(tree: Tree): Option[(Tree, List[Tree])] =
+      tree match
+        case TypeApply(qual, args) => Some(qual -> args)
+        case Apply(qual, args) => Some(qual -> args)
+        case UnApply(qual, implicits, args) => Some(qual -> (implicits ++ args))
+        case AppliedTypeTree(qual, args) => Some(qual -> args)
+        case _ => None
 end MetalsInteractive

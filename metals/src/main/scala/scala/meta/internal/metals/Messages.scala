@@ -41,15 +41,6 @@ object Messages {
   )
 
   object Worksheets {
-    def unsupportedScalaVersion(
-        unsupportedVersion: String,
-        fallback: String,
-        recommended: String,
-    ) = new MessageParams(
-      MessageType.Warning,
-      s"Scala ${unsupportedVersion} is not supported in worksheets. Falling back to ${fallback} without your classpath.\n" +
-        s"Consider using ${recommended} instead to fix this.",
-    )
 
     val unableToExport = new MessageParams(
       MessageType.Warning,
@@ -111,6 +102,10 @@ object Messages {
   val ImportProjectFailed = new MessageParams(
     MessageType.Error,
     "Import project failed, no functionality will work. See the logs for more details",
+  )
+  val ImportAlreadyRunning = new MessageParams(
+    MessageType.Warning,
+    s"Import already running. \nPlease cancel the current import to run a new one.",
   )
   val ImportProjectPartiallyFailed = new MessageParams(
     MessageType.Warning,

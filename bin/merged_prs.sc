@@ -105,7 +105,7 @@ def template(
     lastTag: String,
     mergedPrs: List[String],
     commits: Int,
-    contributos: List[String],
+    contributors: List[String],
 ) = {
   s"""|---
       |author: $author
@@ -128,7 +128,7 @@ def template(
       |  </tr>
       |    <tr>
       |    <td>Contributors</td>
-      |    <td align="center">${contributos.size}</td>
+      |    <td align="center">${contributors.size}</td>
       |  </tr>
       |  <tr>
       |    <td>Closed issues</td>
@@ -141,7 +141,8 @@ def template(
       |</tbody>
       |</table>
       |
-      |For full details: https://github.com/scalameta/metals/milestone/<num>?closed=1
+      |For full details: [https://github.com/scalameta/metals/milestone/_num_?closed=1]
+      |(https://github.com/scalameta/metals/milestone/_num_?closed=1)
       |
       |Metals is a language server for Scala that works with VS Code, Vim, Emacs and
       |Sublime Text. Metals is developed at the
@@ -154,7 +155,13 @@ def template(
       |Check out [https://scalameta.org/metals/](https://scalameta.org/metals/), and
       |give Metals a try!
       |
-      |-
+      |
+      |- [First item](#first-item)
+      |- [Second item](#second-item)
+      |
+      |## First item
+      |
+      |## Second item
       |
       |## Contributors
       |
@@ -162,7 +169,7 @@ def template(
       |
       |```
       |$$ git shortlog -sn --no-merges $firstTag..$lastTag
-      |${contributos.mkString("\n")}
+      |${contributors.mkString("\n")}
       |```
       |
       |## Merged PRs

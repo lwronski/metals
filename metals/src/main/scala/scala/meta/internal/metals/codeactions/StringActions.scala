@@ -4,8 +4,9 @@ import scala.concurrent.ExecutionContext
 import scala.concurrent.Future
 
 import scala.meta.internal.metals.Buffers
-import scala.meta.internal.metals.CodeAction
 import scala.meta.internal.metals.MetalsEnrichments._
+import scala.meta.internal.metals.codeactions.CodeAction
+import scala.meta.internal.metals.codeactions.CodeActionBuilder
 import scala.meta.internal.parsing.Trees
 import scala.meta.pc.CancelToken
 import scala.meta.tokens.Token
@@ -40,28 +41,28 @@ class StringActions(buffers: Buffers) extends CodeAction {
               )
               .collect {
                 case token: Token.Constant.String
-                    if (token.pos.toLSP.overlapsWith(range)
+                    if (token.pos.toLsp.overlapsWith(range)
                       && isNotTripleQuote(token)) =>
                   token
                 case start: Token.Interpolation.Start
-                    if (start.pos.toLSP.getStart.getCharacter <= range.getStart.getCharacter
+                    if (start.pos.toLsp.getStart.getCharacter <= range.getStart.getCharacter
                       && isNotTripleQuote(start)) =>
                   start
                 case end: Token.Interpolation.End
-                    if (end.pos.toLSP.getEnd.getCharacter >= range.getEnd.getCharacter
+                    if (end.pos.toLsp.getEnd.getCharacter >= range.getEnd.getCharacter
                       && isNotTripleQuote(end)) =>
                   end
               }
               .toList match {
               case (t: Token.Constant.String) :: _ =>
-                List(stripMarginAction(uri, t.pos.toLSP))
+                List(stripMarginAction(uri, t.pos.toLsp))
               case _ :: (t: Token.Constant.String) :: _ =>
-                List(stripMarginAction(uri, t.pos.toLSP))
+                List(stripMarginAction(uri, t.pos.toLsp))
               case (s: Token.Interpolation.Start) :: (e: Token.Interpolation.End) :: _ =>
                 List(
                   stripMarginAction(
                     uri,
-                    new l.Range(s.pos.toLSP.getStart, e.pos.toLSP.getEnd),
+                    new l.Range(s.pos.toLsp.getStart, e.pos.toLsp.getEnd),
                   )
                 )
               case _ =>
@@ -70,7 +71,7 @@ class StringActions(buffers: Buffers) extends CodeAction {
 
             val interpolationActions = tokens.collect {
               case token: Token.Constant.String
-                  if token.pos.toLSP.overlapsWith(range) =>
+                  if token.pos.toLsp.overlapsWith(range) =>
                 interpolateAction(uri, token)
             }.toList
 
@@ -80,9 +81,9 @@ class StringActions(buffers: Buffers) extends CodeAction {
                     if (i + 2 < tokens.length
                       && tokens(i + 2).is[Token.Interpolation.End]) =>
                   def overlaps = List(start, tokens(i + 1), tokens(i + 2))
-                    .exists(_.pos.toLSP.overlapsWith(range))
+                    .exists(_.pos.toLsp.overlapsWith(range))
                   if (overlaps) {
-                    val lspRange = start.pos.toLSP
+                    val lspRange = start.pos.toLsp
                     val editRange =
                       new l.Range(lspRange.getStart, lspRange.getEnd)
                     Some(removeInterpolationAction(uri, editRange))
@@ -121,7 +122,7 @@ class StringActions(buffers: Buffers) extends CodeAction {
       uri: String,
       token: Token.Constant.String,
   ): l.CodeAction = {
-    val range = token.pos.toLSP
+    val range = token.pos.toLsp
     val start = range.getStart()
     val dollarIndexes = token.value.indicesOf("$")
     lazy val newlineIndexes = token.value.indicesOf("\n")
@@ -170,14 +171,11 @@ class StringActions(buffers: Buffers) extends CodeAction {
       uri: String,
       edits: List[l.TextEdit],
   ): l.CodeAction = {
-    val codeAction = new l.CodeAction()
-    codeAction.setTitle(title)
-    codeAction.setKind(l.CodeActionKind.Refactor)
-    codeAction.setEdit(
-      new l.WorkspaceEdit(Map(uri -> edits.asJava).asJava)
+    CodeActionBuilder.build(
+      title = title,
+      kind = l.CodeActionKind.RefactorRewrite,
+      changes = List(uri.toAbsolutePath -> edits),
     )
-
-    codeAction
   }
 }
 

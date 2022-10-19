@@ -4,7 +4,9 @@ import java.nio.file.Path
 
 import scala.meta.Dialect
 import scala.meta.dialects._
+import scala.meta.internal.builds.MillBuildTool
 import scala.meta.internal.metals.MetalsEnrichments._
+import scala.meta.internal.semver.SemVer
 import scala.meta.io.AbsolutePath
 
 import ch.epfl.scala.bsp4j.BuildTarget
@@ -20,6 +22,7 @@ case class ScalaTarget(
     scalac: ScalacOptionsItem,
     autoImports: Option[Seq[String]],
     sbtVersion: Option[String],
+    bspConnection: Option[BuildServerConnection],
 ) {
 
   def isSbt = sbtVersion.isDefined
@@ -35,6 +38,8 @@ case class ScalaTarget(
             Scala213Source3
           case Scala212 if containsSource3 =>
             Scala212Source3
+          case Scala3 if other.contains("NIGHTLY") =>
+            Scala3.withAllowFewerBraces(true)
           case other => other
         }
     }
@@ -51,9 +56,29 @@ case class ScalaTarget(
   def fmtDialect: ScalafmtDialect =
     ScalaVersions.fmtDialectForScalaVersion(scalaVersion, containsSource3)
 
-  def isSemanticdbEnabled: Boolean = scalac.isSemanticdbEnabled(scalaVersion)
+  /**
+   * Typically to verify that SemanticDB is enabled correctly we check the scalacOptions to ensure
+   * that both we see that it's enabled and that things like the sourceroot are set correctly.
+   * There are server that configure SemanticDB in a non-traditional way. For those situations
+   * our check isn't as robust, but for the initial check here we just mark them as OK since
+   * we know and trust that for that given version and build server it should be configured.
+   *
+   * This is the case for mill-bsp >= 0.10.6
+   */
+  private def semanticDbEnabledAlternatively = bspConnection.exists {
+    buildServer =>
+      buildServer.name == MillBuildTool.name &&
+      SemVer.isCompatibleVersion(
+        MillBuildTool.emitsSemanticDbByDefault,
+        buildServer.version,
+      )
+  }
 
-  def isSourcerootDeclared: Boolean = scalac.isSourcerootDeclared(scalaVersion)
+  def isSemanticdbEnabled: Boolean =
+    scalac.isSemanticdbEnabled(scalaVersion) || semanticDbEnabledAlternatively
+
+  def isSourcerootDeclared: Boolean =
+    scalac.isSourcerootDeclared(scalaVersion) || semanticDbEnabledAlternatively
 
   def fullClasspath: List[Path] =
     scalac.classpath.map(_.toAbsolutePath).collect {

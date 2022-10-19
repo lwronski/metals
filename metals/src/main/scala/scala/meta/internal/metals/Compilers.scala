@@ -33,11 +33,13 @@ import org.eclipse.lsp4j.CompletionItemKind
 import org.eclipse.lsp4j.CompletionList
 import org.eclipse.lsp4j.CompletionParams
 import org.eclipse.lsp4j.Diagnostic
+import org.eclipse.lsp4j.DocumentHighlight
 import org.eclipse.lsp4j.Hover
 import org.eclipse.lsp4j.InitializeParams
 import org.eclipse.lsp4j.SelectionRange
 import org.eclipse.lsp4j.SelectionRangeParams
 import org.eclipse.lsp4j.SignatureHelp
+import org.eclipse.lsp4j.TextDocumentIdentifier
 import org.eclipse.lsp4j.TextDocumentPositionParams
 import org.eclipse.lsp4j.TextEdit
 import org.eclipse.lsp4j.{Position => LspPosition}
@@ -145,6 +147,7 @@ class Compilers(
                   trees,
                   buildTargets,
                   saveSymbolFileToDisk = !config.isVirtualDocumentSupported(),
+                  sourceMapper,
                 )
               ).getOrElse(EmptySymbolSearch),
               "default",
@@ -385,11 +388,15 @@ class Compilers(
   def autoImports(
       params: TextDocumentPositionParams,
       name: String,
+      findExtensionMethods: Boolean,
       token: CancelToken,
   ): Future[ju.List[AutoImportsResult]] = {
     withPCAndAdjustLsp(params) { (pc, pos, adjust) =>
-      pc.autoImports(name, CompilerOffsetParams.fromPos(pos, token))
-        .asScala
+      pc.autoImports(
+        name,
+        CompilerOffsetParams.fromPos(pos, token),
+        findExtensionMethods,
+      ).asScala
         .map { list =>
           list.map(adjust.adjustImportResult)
           list
@@ -407,6 +414,37 @@ class Compilers(
         .map { edits =>
           adjust.adjustTextEdits(edits)
         }
+    }
+  }.getOrElse(Future.successful(Nil.asJava))
+
+  def documentHighlight(
+      params: TextDocumentPositionParams,
+      token: CancelToken,
+  ): Future[ju.List[DocumentHighlight]] = {
+    withPCAndAdjustLsp(params) { (pc, pos, adjust) =>
+      pc.documentHighlight(CompilerOffsetParams.fromPos(pos, token))
+        .asScala
+        .map { highlights =>
+          adjust.adjustDocumentHighlight(highlights)
+        }
+    }
+  }.getOrElse(Future.successful(Nil.asJava))
+
+  def extractMethod(
+      doc: TextDocumentIdentifier,
+      range: LspRange,
+      extractionPos: LspPosition,
+      token: CancelToken,
+  ): Future[ju.List[TextEdit]] = {
+    withPCAndAdjustLsp(doc.getUri(), range, extractionPos) {
+      (pc, metaRange, metaExtractionPos, adjust) =>
+        pc.extractMethod(
+          CompilerRangeParams.fromPos(metaRange, token),
+          CompilerOffsetParams.fromPos(metaExtractionPos, token),
+        ).asScala
+          .map { edits =>
+            adjust.adjustTextEdits(edits)
+          }
     }
   }.getOrElse(Future.successful(Nil.asJava))
 
@@ -556,6 +594,7 @@ class Compilers(
             trees,
             buildTargets,
             saveSymbolFileToDisk = !config.isVirtualDocumentSupported(),
+            sourceMapper,
             workspaceFallback = Some(search),
           )
           newCompiler(
@@ -587,6 +626,7 @@ class Compilers(
               trees,
               buildTargets,
               saveSymbolFileToDisk = !config.isVirtualDocumentSupported(),
+              sourceMapper,
             ),
             path.toString(),
             path,
@@ -653,6 +693,35 @@ class Compilers(
           compiler.scalaVersion(),
         )
       pos.toMeta(input).map(metaPos => fn(compiler, metaPos, adjust))
+    }
+  }
+
+  private def withPCAndAdjustLsp[T](
+      uri: String,
+      range: LspRange,
+      extractionPos: LspPosition,
+  )(
+      fn: (
+          PresentationCompiler,
+          Position,
+          Position,
+          AdjustLspData,
+      ) => T
+  ): Option[T] = {
+    val path = uri.toAbsolutePath
+    loadCompiler(path).flatMap { compiler =>
+      val (input, adjustRequest, adjustResponse) =
+        sourceAdjustments(
+          uri,
+          compiler.scalaVersion(),
+        )
+      for {
+        metaRange <- new LspRange(
+          adjustRequest(range.getStart()),
+          adjustRequest(range.getEnd()),
+        ).toMeta(input)
+        metaExtractionPos <- adjustRequest(extractionPos).toMeta(input)
+      } yield fn(compiler, metaRange, metaExtractionPos, adjustResponse)
     }
   }
 

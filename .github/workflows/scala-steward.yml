@@ -1,6 +1,6 @@
 on:
   schedule:
-    - cron: '0 0 1,15 * *'
+    - cron: '0 0 * * 1,5' # every Monday and Friday
   workflow_dispatch:
 
 name: Launch Scala Steward
@@ -20,3 +20,4 @@ jobs:
           author-email: scalameta@gmail.com
           author-name: Scalameta Bot
           repos-file: .github/steward-repos.md
+          other-args: '--add-labels'

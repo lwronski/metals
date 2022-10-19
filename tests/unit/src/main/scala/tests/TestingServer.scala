@@ -73,6 +73,12 @@ import ch.epfl.scala.{bsp4j => b}
 import com.google.gson.JsonElement
 import com.google.gson.JsonObject
 import munit.Tag
+import org.eclipse.lsp4j.CallHierarchyIncomingCall
+import org.eclipse.lsp4j.CallHierarchyIncomingCallsParams
+import org.eclipse.lsp4j.CallHierarchyItem
+import org.eclipse.lsp4j.CallHierarchyOutgoingCall
+import org.eclipse.lsp4j.CallHierarchyOutgoingCallsParams
+import org.eclipse.lsp4j.CallHierarchyPrepareParams
 import org.eclipse.lsp4j.ClientCapabilities
 import org.eclipse.lsp4j.CodeActionContext
 import org.eclipse.lsp4j.CodeActionParams
@@ -428,7 +434,7 @@ final case class TestingServer(
         newRef(definition.symbol, location),
         mutable.ListBuffer.empty,
       )
-      buf += new Location(source.toURI.toString, token.pos.toLSP)
+      buf += new Location(source.toURI.toString, token.pos.toLsp)
     }
     val definition = Seq.newBuilder[SymbolReference]
     val references = Seq.newBuilder[SymbolReference]
@@ -454,6 +460,70 @@ final case class TestingServer(
       references.result().distinct,
       definition.result().distinct,
     )
+  }
+
+  def assertCallHierarchy[C](
+      expected: Map[String, String],
+      base: Map[String, String],
+      specifiedUri: Option[String],
+      calls: List[C],
+      getItem: C => CallHierarchyItem,
+      getFromRanges: C => List[l.Range],
+  ): (List[C], CallHierarchyItem) = {
+    val pattern = """(<|>)(\?)(<|>)""".r
+    val itemExpected = expected.map { case (filename, code) =>
+      filename -> pattern.replaceAllIn(code, "")
+    }
+
+    val (call, remaining) = calls.partition(call => {
+      val item = getItem(call)
+      TestRanges
+        .renderLocationsAsString(
+          base,
+          List(new Location(item.getUri(), item.getSelectionRange())),
+        )
+        .forall { case (file, obtained) =>
+          itemExpected(file) == obtained
+        }
+    })
+
+    assert(
+      call.nonEmpty,
+      s"Expected item \"\"\"$itemExpected\"\"\" was not found.",
+    )
+
+    val fromRangesExpected = expected.map { case (filename, code) =>
+      filename -> """(<|>)(\?)(<|>)""".r.replaceAllIn(
+        code.replaceAll("(<<|>>)", ""),
+        m => m.group(1) + m.group(3),
+      )
+    }
+
+    val item = call.headOption
+      .map(call => {
+        val item = getItem(call)
+        val uri = specifiedUri.getOrElse(item.getUri())
+        TestRanges
+          .renderLocationsAsString(
+            base,
+            getFromRanges(call).map(range => new Location(uri, range)),
+          )
+          .foreach { case (file, obtained) =>
+            val expectedImpl = fromRangesExpected(file)
+            Assertions.assertNoDiff(
+              obtained,
+              expectedImpl,
+            )
+          }
+        item
+      })
+      .getOrElse {
+        throw new IllegalArgumentException(
+          "An `<<...>>>` that specifies caller postion is not found"
+        )
+      }
+
+    (remaining, item)
   }
 
   def initialize(
@@ -729,7 +799,7 @@ final case class TestingServer(
     val point = start + offset
     val pos = m.Position.Range(input, point, point)
     val params =
-      new CompletionParams(path.toTextDocumentIdentifier, pos.toLSP.getStart)
+      new CompletionParams(path.toTextDocumentIdentifier, pos.toLsp.getStart)
     server.completion(params).asScala
   }
 
@@ -765,7 +835,7 @@ final case class TestingServer(
     val params =
       new l.SelectionRangeParams(
         path.toTextDocumentIdentifier,
-        List(pos.toLSP.getStart).asJava,
+        List(pos.toLsp.getStart).asJava,
       )
 
     server.selectionRange(params).asScala
@@ -987,7 +1057,7 @@ final case class TestingServer(
       fn(
         text,
         path.toTextDocumentIdentifier,
-        pos.toLSP.getStart,
+        pos.toLsp.getStart,
       )
     }
   }
@@ -1020,7 +1090,7 @@ final case class TestingServer(
       fn(
         text,
         path.toTextDocumentIdentifier,
-        pos.toLSP,
+        pos.toLsp,
       )
     }
   }
@@ -1410,6 +1480,48 @@ final case class TestingServer(
           pos.formatMessage("info", "reference")
         }
         .mkString("\n")
+    }
+  }
+
+  def prepareCallHierarchy(
+      filename: String,
+      query: String,
+  ): Future[Option[CallHierarchyItem]] = {
+    for {
+      (_, params) <- offsetParams(filename, query, workspace)
+      prepareParams = new CallHierarchyPrepareParams(
+        params.getTextDocument(),
+        params.getPosition(),
+      )
+      result <- server.prepareCallHierarchy(prepareParams).asScala
+    } yield {
+      result.asScala.headOption
+    }
+  }
+
+  def incomingCalls(
+      item: CallHierarchyItem
+  ): Future[List[CallHierarchyIncomingCall]] = {
+    item.setData(item.getData.toJsonObject)
+    for {
+      result <- server
+        .callHierarchyIncomingCalls(new CallHierarchyIncomingCallsParams(item))
+        .asScala
+    } yield {
+      result.asScala.toList
+    }
+  }
+
+  def outgoingCalls(
+      item: CallHierarchyItem
+  ): Future[List[CallHierarchyOutgoingCall]] = {
+    item.setData(item.getData.toJsonObject)
+    for {
+      result <- server
+        .callHierarchyOutgoingCalls(new CallHierarchyOutgoingCallsParams(item))
+        .asScala
+    } yield {
+      result.asScala.toList
     }
   }
 

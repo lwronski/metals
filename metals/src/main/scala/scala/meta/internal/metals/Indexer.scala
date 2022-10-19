@@ -194,7 +194,10 @@ final case class Indexer(
         val importedBuild = buildTool.importedBuild
         data.reset()
         data.addWorkspaceBuildTargets(importedBuild.workspaceBuildTargets)
-        data.addScalacOptions(importedBuild.scalacOptions)
+        data.addScalacOptions(
+          importedBuild.scalacOptions,
+          bspSession().map(_.mainConnection),
+        )
         data.addJavacOptions(importedBuild.javacOptions)
 
         // For "wrapped sources", we create dedicated TargetData.MappedSource instances,
@@ -300,6 +303,7 @@ final case class Indexer(
       clientConfig.initialConfig.statistics.isIndex,
     ) {
       try {
+        fileWatcher.cancel()
         fileWatcher.start()
       } catch {
         // note(@tgodzik) This is needed in case of ammonite
@@ -519,20 +523,12 @@ final case class Indexer(
         val methodSymbols = ArrayBuffer.empty[WorkspaceSymbolInformation]
         SemanticdbDefinition.foreach(input, dialect) {
           case SemanticdbDefinition(info, occ, owner) =>
-            // TODO: Do not index (extension) METHOD, they will be indexed later
-            // we index methods for auto-import missing extension methods feature for now
-            // but those feature should use methodSymbols
-            // see: https://github.com/scalameta/metals/issues/4212
-            if (
-              WorkspaceSymbolProvider.isRelevantKind(
-                info.kind
-              ) || info.kind == Kind.METHOD
-            ) {
+            if (WorkspaceSymbolProvider.isRelevantKind(info.kind)) {
               occ.range.foreach { range =>
                 symbols += WorkspaceSymbolInformation(
                   info.symbol,
                   info.kind,
-                  range.toLSP,
+                  range.toLsp,
                 )
               }
             }
@@ -547,7 +543,7 @@ final case class Indexer(
                 methodSymbols += WorkspaceSymbolInformation(
                   info.symbol,
                   info.kind,
-                  range.toLSP,
+                  range.toLsp,
                 )
               }
             }

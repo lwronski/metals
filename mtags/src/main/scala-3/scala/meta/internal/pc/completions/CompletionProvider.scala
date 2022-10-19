@@ -22,6 +22,7 @@ import dotty.tools.dotc.core.Contexts.Context
 import dotty.tools.dotc.core.StdNames
 import dotty.tools.dotc.interactive.Interactive
 import dotty.tools.dotc.interactive.InteractiveDriver
+import org.eclipse.lsp4j.Command
 import org.eclipse.lsp4j.CompletionItem
 import org.eclipse.lsp4j.CompletionItemKind
 import org.eclipse.lsp4j.CompletionList
@@ -30,7 +31,7 @@ import org.eclipse.lsp4j.InsertTextMode
 import org.eclipse.lsp4j.TextEdit
 import org.eclipse.lsp4j.Range as LspRange
 
-class CompletionsProvider(
+class CompletionProvider(
     search: SymbolSearch,
     driver: InteractiveDriver,
     params: OffsetParams,
@@ -61,7 +62,7 @@ class CompletionsProvider(
           MetalsInteractive.contextOfPath(tpdPath)(using newctx)
         val indexedCtx = IndexedContext(locatedCtx)
         val completionPos =
-          CompletionPos.infer(pos, params.text, path)(using newctx)
+          CompletionPos.infer(pos, params, path)(using newctx)
         val (completions, searchResult) =
           new Completions(
             pos,
@@ -174,37 +175,22 @@ class CompletionsProvider(
     // to recalculate the description
     // related issue https://github.com/lampepfl/dotty/issues/11941
     lazy val kind: CompletionItemKind = completion.completionItemKind
-
-    val description =
-      completion.description(printer)
+    val description = completion.description(printer)
+    val label = completion.labelWithDescription(printer)
+    val ident = completion.insertText.getOrElse(completion.label)
 
     def mkItem0(
-        ident: String,
+        label: String,
         nameEdit: TextEdit,
-        isFromWorkspace: Boolean = false,
         additionalEdits: List[TextEdit] = Nil,
         filterText: Option[String] = None,
+        command: Option[String] = None,
     ): CompletionItem =
-
-      val label =
-        kind match
-          case CompletionItemKind.Method =>
-            s"${ident}${description}"
-          case CompletionItemKind.Variable | CompletionItemKind.Field =>
-            s"${ident}: ${description}"
-          case CompletionItemKind.Module | CompletionItemKind.Class =>
-            if isFromWorkspace then s"${ident} -${description}"
-            else s"${ident}${description}"
-          case _ =>
-            ident
       val item = new CompletionItem(label)
-
       item.setSortText(f"${idx}%05d")
       item.setDetail(description)
       item.setFilterText(filterText.getOrElse(completion.label))
-
       item.setTextEdit(nameEdit)
-
       item.setAdditionalTextEdits(additionalEdits.asJava)
 
       completion match
@@ -230,35 +216,42 @@ class CompletionsProvider(
       if config.isCompletionSnippetsEnabled then
         item.setInsertTextFormat(InsertTextFormat.Snippet)
 
+      command.foreach { command =>
+        item.setCommand(new Command("", command))
+      }
+
       item.setKind(kind)
       item
     end mkItem0
 
     def mkItem(
-        ident: String,
+        label: String,
         value: String,
-        isFromWorkspace: Boolean = false,
         additionalEdits: List[TextEdit] = Nil,
         filterText: Option[String] = None,
         range: Option[LspRange] = None,
+        command: Option[String] = None,
     ): CompletionItem =
       val nameEdit = new TextEdit(
         range.getOrElse(editRange),
         value,
       )
-      mkItem0(ident, nameEdit, isFromWorkspace, additionalEdits, filterText)
+      mkItem0(
+        label,
+        nameEdit,
+        additionalEdits,
+        filterText,
+        command,
+      )
     end mkItem
 
     def mkWorkspaceItem(
-        ident: String,
         value: String,
         additionalEdits: List[TextEdit] = Nil,
     ): CompletionItem =
-      mkItem(ident, value, isFromWorkspace = true, additionalEdits)
+      mkItem(label, value, additionalEdits)
 
-    val ident = completion.label
-
-    val completionTextSuffix = completion.snippetSuffix.getOrElse("")
+    val completionTextSuffix = completion.snippetSuffix.toEdit
 
     lazy val isInStringInterpolation =
       path match
@@ -278,54 +271,48 @@ class CompletionsProvider(
         v: CompletionValue.Workspace | CompletionValue.Extension |
           CompletionValue.Interpolator
     ) =
-      val label = v.label
       val sym = v.symbol
       val suffix = v.snippetSuffix
       path match
         case (_: Ident) :: (_: Import) :: _ =>
-          mkWorkspaceItem(
-            ident,
-            sym.fullNameBackticked,
-          )
+          mkWorkspaceItem(sym.fullNameBackticked)
         case _ =>
           autoImports.editsForSymbol(sym) match
             case Some(edits) =>
               edits match
                 case AutoImportEdits(Some(nameEdit), other) =>
                   mkItem0(
-                    ident,
+                    label,
                     nameEdit,
-                    isFromWorkspace = true,
                     v.additionalEdits ++ other.toList,
+                    filterText = v.filterText,
                   )
                 case _ =>
                   mkItem(
-                    ident,
+                    label,
                     v.insertText.getOrElse(
                       ident.backticked + completionTextSuffix
                     ),
-                    isFromWorkspace = true,
                     v.additionalEdits ++ edits.edits,
                     range = v.range,
+                    filterText = v.filterText,
                   )
             case None =>
               val r = indexedContext.lookupSym(sym)
               r match
                 case IndexedContext.Result.InScope =>
                   mkItem(
-                    ident,
+                    label,
                     ident.backticked + completionTextSuffix,
                     additionalEdits = v.additionalEdits,
                   )
                 case _ if isInStringInterpolation =>
                   mkWorkspaceItem(
-                    ident,
                     "{" + sym.fullNameBackticked + completionTextSuffix + "}",
                     additionalEdits = v.additionalEdits,
                   )
                 case _ =>
                   mkWorkspaceItem(
-                    ident,
                     sym.fullNameBackticked + completionTextSuffix,
                     additionalEdits = v.additionalEdits,
                   )
@@ -339,7 +326,7 @@ class CompletionsProvider(
       case v: CompletionValue.Interpolator if v.isWorkspace || v.isExtension =>
         mkItemWithImports(v)
       case CompletionValue.Override(
-            label,
+            _,
             value,
             _,
             shortNames,
@@ -354,25 +341,46 @@ class CompletionsProvider(
         mkItem(
           label,
           value,
-          false,
           additionalEdits,
           filterText,
           Some(completionPos.copy(start = start).toEditRange),
         )
-      case CompletionValue.NamedArg(label, _) =>
+      case CompletionValue.NamedArg(_, _) =>
         mkItem(
           label,
           label.replace("$", "$$"),
         ) // escape $ for snippet
-      case CompletionValue.Keyword(label, text) =>
+      case CompletionValue.Keyword(_, text) =>
         mkItem(label, text.getOrElse(label))
-      case CompletionValue.Document(label, doc, desc) =>
+      case CompletionValue.Document(_, doc, desc) =>
         mkItem(label, doc, filterText = Some(desc))
-      case CompletionValue.Autofill(value) => mkItem(ident, value)
+      case CompletionValue.Autofill(value) => mkItem(label, value)
+      case CompletionValue.CaseKeyword(
+            _,
+            _,
+            text,
+            additionalEdit,
+            range,
+            command,
+          ) =>
+        mkItem(
+          label,
+          text.getOrElse(label),
+          additionalEdits = additionalEdit,
+          range = range,
+          command = command,
+        )
+      case CompletionValue.MatchCompletion(
+            _,
+            text,
+            additionalEdits,
+            desc,
+          ) =>
+        mkItem(label, text.getOrElse(label), additionalEdits = additionalEdits)
       case _ =>
         val insert = completion.insertText.getOrElse(ident.backticked)
         mkItem(
-          ident,
+          label,
           insert + completionTextSuffix,
           additionalEdits = completion.additionalEdits,
           range = completion.range,
@@ -380,7 +388,7 @@ class CompletionsProvider(
         )
     end match
   end completionItems
-end CompletionsProvider
+end CompletionProvider
 
 case object Cursor:
   val value = "CURSOR"

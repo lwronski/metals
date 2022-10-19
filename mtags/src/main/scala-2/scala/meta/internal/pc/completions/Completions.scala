@@ -85,11 +85,11 @@ trait Completions { this: MetalsGlobal =>
    */
   def relevancePenalty(m: Member): Int =
     m match {
-      case TypeMember(sym, _, true, isInherited, _) =>
+      case tm: TypeMember if tm.accessible =>
         computeRelevancePenalty(
-          sym,
+          tm.sym,
           m.implicitlyAdded,
-          isInherited
+          tm.inherited
         )
       case w: WorkspaceMember =>
         MemberOrdering.IsWorkspaceSymbol + w.sym.name.length()
@@ -101,9 +101,9 @@ trait Completions { this: MetalsGlobal =>
         ) >>> 15
         if (!w.sym.isAbstract) penalty |= MemberOrdering.IsNotAbstract
         penalty
-      case ScopeMember(sym, _, true, _) =>
+      case sm: ScopeMember if sm.accessible =>
         computeRelevancePenalty(
-          sym,
+          sm.sym,
           m.implicitlyAdded,
           isInherited = false
         )
@@ -436,6 +436,7 @@ trait Completions { this: MetalsGlobal =>
       latestEnclosingArg: List[Tree]
   ): CompletionPosition = {
     val PatternMatch = new PatternMatch(pos)
+    val ScalaCliExtractor = new ScalaCliExtractor(pos)
     def fromIdentApply(
         ident: Ident,
         apply: Apply
@@ -452,6 +453,12 @@ trait Completions { this: MetalsGlobal =>
     }
 
     latestEnclosingArg match {
+      case MillIvyExtractor(dep) =>
+        MillIvyCompletion(pos, text, dep)
+      case SbtLibExtractor(pos, dep) if pos.source.path.isSbt =>
+        SbtLibCompletion(pos, dep)
+      case ScalaCliExtractor(dep) =>
+        ScalaCliCompletion(pos, text, dep)
       case _ if isScaladocCompletion(pos, text) =>
         val associatedDef = onUnitOf(pos.source) { unit =>
           new AssociatedMemberDefFinder(pos).findAssociatedDef(unit.body)
@@ -501,8 +508,8 @@ trait Completions { this: MetalsGlobal =>
         )
       case (m @ Match(_, Nil)) :: parent :: _ =>
         CaseKeywordCompletion(m.selector, editRange, pos, text, parent)
-      case Ident(name) :: (_: CaseDef) :: (m: Match) :: parent :: _
-          if isCasePrefix(name) =>
+      case Ident(name) :: (cd: CaseDef) :: (m: Match) :: parent :: _
+          if isCasePrefix(name) && pos.line != cd.pos.line =>
         CaseKeywordCompletion(m.selector, editRange, pos, text, parent)
       case (ident @ Ident(name)) :: Block(
             _,
@@ -524,6 +531,12 @@ trait Completions { this: MetalsGlobal =>
       case (imp @ Import(select, selector)) :: _
           if isAmmoniteFileCompletionPosition(imp, pos) =>
         AmmoniteFileCompletions(select, selector, pos, editRange)
+      case (imp @ Import(select, selector)) :: _
+          if isAmmoniteIvyCompletionPosition(
+            imp,
+            pos
+          ) || isWorksheetIvyCompletionPosition(imp, pos) =>
+        AmmoniteIvyCompletions(select, selector, pos, editRange)
       case _ =>
         inferCompletionPosition(
           pos,
@@ -536,15 +549,34 @@ trait Completions { this: MetalsGlobal =>
     }
   }
 
-  def isAmmoniteFileCompletionPosition(tree: Tree, pos: Position): Boolean = {
+  private def isAmmoniteCompletionPosition(
+      magicImport: String,
+      tree: Tree,
+      pos: Position
+  ): Boolean = {
     tree match {
       case Import(select, _) =>
         pos.source.file.name.isAmmoniteGeneratedFile && select
           .toString()
-          .startsWith("$file")
+          .startsWith(magicImport)
       case _ => false
     }
   }
+
+  def isAmmoniteFileCompletionPosition(tree: Tree, pos: Position): Boolean =
+    isAmmoniteCompletionPosition("$file", tree, pos)
+
+  def isAmmoniteIvyCompletionPosition(tree: Tree, pos: Position): Boolean =
+    isAmmoniteCompletionPosition("$ivy", tree, pos)
+
+  def isWorksheetIvyCompletionPosition(tree: Tree, pos: Position): Boolean =
+    tree match {
+      case Import(select, _) =>
+        pos.source.file.name.isWorksheet && (select
+          .toString() == "<$ivy: error>" || select
+          .toString() == "<$dep: error>")
+      case _ => false
+    }
 
   private def inferCompletionPosition(
       pos: Position,
@@ -627,7 +659,8 @@ trait Completions { this: MetalsGlobal =>
       }
   }
 
-  class MetalsLocator(pos: Position) extends Traverser {
+  class MetalsLocator(pos: Position, acceptTransparent: Boolean = false)
+      extends Traverser {
     def locateIn(root: Tree): Tree = {
       lastVisitedParentTrees = Nil
       traverse(root)
@@ -651,7 +684,7 @@ trait Completions { this: MetalsGlobal =>
     }
 
     protected def isEligible(t: Tree): Boolean = {
-      !t.pos.isTransparent || {
+      !t.pos.isTransparent || acceptTransparent || {
         t match {
           // new User(age = 42, name = "") becomes transparent, which doesn't happen with normal methods
           case Apply(Select(_: New, _), _) => true
@@ -807,13 +840,14 @@ trait Completions { this: MetalsGlobal =>
     result
   }
 
-  /**
-   * Returns the start offset of the identifier starting as the given offset position.
-   */
-  def inferIdentStart(pos: Position, text: String): Int = {
+  def inferStart(
+      pos: Position,
+      text: String,
+      charPred: Char => Boolean
+  ): Int = {
     def fallback: Int = {
       var i = pos.point - 1
-      while (i >= 0 && Chars.isIdentifierPart(text.charAt(i))) {
+      while (i >= 0 && charPred(text.charAt(i))) {
         i -= 1
       }
       i + 1
@@ -835,6 +869,12 @@ trait Completions { this: MetalsGlobal =>
       }
     loop(lastVisitedParentTrees)
   }
+
+  /**
+   * Returns the start offset of the identifier starting as the given offset position.
+   */
+  def inferIdentStart(pos: Position, text: String): Int =
+    inferStart(pos, text, Chars.isIdentifierPart)
 
   /**
    * Returns the end offset of the identifier starting as the given offset position.

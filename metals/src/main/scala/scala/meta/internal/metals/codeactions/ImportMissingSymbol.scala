@@ -3,13 +3,18 @@ package scala.meta.internal.metals.codeactions
 import scala.concurrent.ExecutionContext
 import scala.concurrent.Future
 
+import scala.meta.internal.metals.BuildTargets
+import scala.meta.internal.metals.Compilers
 import scala.meta.internal.metals.MetalsEnrichments._
-import scala.meta.internal.metals._
+import scala.meta.internal.metals.ScalaVersions
+import scala.meta.internal.metals.ScalacDiagnostic
+import scala.meta.internal.metals.codeactions.CodeAction
 import scala.meta.pc.CancelToken
 
 import org.eclipse.{lsp4j => l}
 
-class ImportMissingSymbol(compilers: Compilers) extends CodeAction {
+class ImportMissingSymbol(compilers: Compilers, buildTargets: BuildTargets)
+    extends CodeAction {
 
   override def kind: String = l.CodeActionKind.QuickFix
 
@@ -19,6 +24,15 @@ class ImportMissingSymbol(compilers: Compilers) extends CodeAction {
   )(implicit ec: ExecutionContext): Future[Seq[l.CodeAction]] = {
 
     val uri = params.getTextDocument().getUri()
+    val file = uri.toAbsolutePath
+    lazy val isScala3 =
+      (for {
+        buildId <- buildTargets.inverseSources(file)
+        target <- buildTargets.scalaTarget(buildId)
+        isScala3 = ScalaVersions.isScala3Version(
+          target.scalaInfo.getScalaVersion()
+        )
+      } yield isScala3).getOrElse(false)
 
     def joinActionEdits(actions: Seq[l.CodeAction]) = {
       actions
@@ -36,26 +50,30 @@ class ImportMissingSymbol(compilers: Compilers) extends CodeAction {
     def importMissingSymbol(
         diagnostic: l.Diagnostic,
         name: String,
+        findExtensionMethods: Boolean = false,
     ): Future[Seq[l.CodeAction]] = {
       val textDocumentPositionParams = new l.TextDocumentPositionParams(
         params.getTextDocument(),
         diagnostic.getRange.getEnd(),
       )
       compilers
-        .autoImports(textDocumentPositionParams, name, token)
+        .autoImports(
+          textDocumentPositionParams,
+          name,
+          findExtensionMethods,
+          token,
+        )
         .map { imports =>
           imports.asScala.map { i =>
             val uri = params.getTextDocument().getUri()
-            val edit = new l.WorkspaceEdit(Map(uri -> i.edits).asJava)
+            val edit = List(uri.toAbsolutePath -> i.edits.asScala.toSeq)
 
-            val codeAction = new l.CodeAction()
-
-            codeAction.setTitle(ImportMissingSymbol.title(name, i.packageName))
-            codeAction.setKind(l.CodeActionKind.QuickFix)
-            codeAction.setDiagnostics(List(diagnostic).asJava)
-            codeAction.setEdit(edit)
-
-            codeAction
+            CodeActionBuilder.build(
+              title = ImportMissingSymbol.title(name, i.packageName),
+              kind = l.CodeActionKind.QuickFix,
+              diagnostics = List(diagnostic),
+              changes = edit,
+            )
           }.toSeq
         }
     }
@@ -68,18 +86,20 @@ class ImportMissingSymbol(compilers: Compilers) extends CodeAction {
         .values
         .filter(_.length == 1)
         .flatten
-        .toSeq
+        .toList
 
       if (uniqueCodeActions.length > 1) {
-        val allSymbols: l.CodeAction = new l.CodeAction()
 
         val diags = uniqueCodeActions.flatMap(_.getDiagnostics().asScala)
         val edits = joinActionEdits(uniqueCodeActions)
 
-        allSymbols.setTitle(ImportMissingSymbol.allSymbolsTitle)
-        allSymbols.setKind(l.CodeActionKind.QuickFix)
-        allSymbols.setDiagnostics(diags.asJava)
-        allSymbols.setEdit(new l.WorkspaceEdit(Map(uri -> edits.asJava).asJava))
+        val allSymbols: l.CodeAction =
+          CodeActionBuilder.build(
+            title = ImportMissingSymbol.allSymbolsTitle,
+            kind = l.CodeActionKind.QuickFix,
+            diagnostics = diags,
+            changes = List(uri.toAbsolutePath -> edits),
+          )
 
         allSymbols +: codeActions
       } else {
@@ -97,9 +117,12 @@ class ImportMissingSymbol(compilers: Compilers) extends CodeAction {
             case diag @ ScalacDiagnostic.SymbolNotFound(name)
                 if params.getRange().overlapsWith(diag.getRange()) =>
               importMissingSymbol(diag, name)
+            // `foo.xxx` where `xxx` is not a member of `foo`
+            // we search for `xxx` only when the target is Scala3
+            // considering there might be an extension method.
             case d @ ScalacDiagnostic.NotAMember(name)
-                if params.getRange().overlapsWith(d.getRange()) =>
-              importMissingSymbol(d, name)
+                if isScala3 && params.getRange().overlapsWith(d.getRange()) =>
+              importMissingSymbol(d, name, findExtensionMethods = true)
           }
       )
       .map { actions =>
