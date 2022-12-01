@@ -199,6 +199,7 @@ final case class Indexer(
           bspSession().map(_.mainConnection),
         )
         data.addJavacOptions(importedBuild.javacOptions)
+        data.addJvmEnvironment(importedBuild.jvmRunEnvironment)
 
         // For "wrapped sources", we create dedicated TargetData.MappedSource instances,
         // able to convert back and forth positions from the user-facing file to
@@ -279,6 +280,10 @@ final case class Indexer(
                   adjustLspData,
                 )
               }
+              override def lineForServer(line: Int): Option[Int] =
+                Some(line + topWrapperLineCount)
+              override def lineForClient(line: Int): Option[Int] =
+                Some(line - topWrapperLineCount)
             }
           data.addMappedSource(path, mappedSource)
         }

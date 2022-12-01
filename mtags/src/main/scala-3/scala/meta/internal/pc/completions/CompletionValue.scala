@@ -58,6 +58,7 @@ object CompletionValue:
           kind = completionItemDataKind,
         )
       )
+    def importSymbol: Symbol = symbol
 
     def completionItemKind(using Context): CompletionItemKind =
       val symbol = this.symbol
@@ -98,6 +99,7 @@ object CompletionValue:
       label: String,
       symbol: Symbol,
       override val snippetSuffix: CompletionSuffix,
+      override val importSymbol: Symbol,
   ) extends Symbolic:
     override def isFromWorkspace: Boolean = true
 
@@ -193,12 +195,14 @@ object CompletionValue:
       override val additionalEdits: List[TextEdit],
       override val range: Option[Range],
       override val filterText: Option[String],
+      override val importSymbol: Symbol,
       isWorkspace: Boolean = false,
       isExtension: Boolean = false,
   ) extends Symbolic:
     override def description(printer: MetalsPrinter)(using Context): String =
       if isExtension then s"${printer.completionSymbol(symbol)} (extension)"
       else super.description(printer)
+  end Interpolator
 
   case class MatchCompletion(
       label: String,

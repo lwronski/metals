@@ -643,17 +643,7 @@ class MetalsLanguageServer(
           semanticdbs,
           stacktraceAnalyzer,
         )
-        renameProvider = new RenameProvider(
-          referencesProvider,
-          implementationProvider,
-          definitionProvider,
-          workspace,
-          languageClient,
-          buffers,
-          compilations,
-          clientConfig,
-          trees,
-        )
+
         syntheticsDecorator = new SyntheticsDecorationProvider(
           workspace,
           semanticdbs,
@@ -708,22 +698,33 @@ class MetalsLanguageServer(
             sourceMapper,
           )
         )
+        renameProvider = new RenameProvider(
+          referencesProvider,
+          implementationProvider,
+          definitionProvider,
+          workspace,
+          languageClient,
+          buffers,
+          compilations,
+          compilers,
+          clientConfig,
+          trees,
+        )
         debugProvider = register(
           new DebugProvider(
             workspace,
-            definitionProvider,
             buildTargets,
             buildTargetClasses,
             compilations,
             languageClient,
             buildClient,
-            classFinder,
             definitionIndex,
             stacktraceAnalyzer,
             clientConfig,
             semanticdbs,
             compilers,
             statusBar,
+            sourceMapper,
           )
         )
         scalafixProvider = ScalafixProvider(
@@ -1607,7 +1608,9 @@ class MetalsLanguageServer(
   def rename(
       params: RenameParams
   ): CompletableFuture[WorkspaceEdit] =
-    CancelTokens.future { token => renameProvider.rename(params, token) }
+    CancelTokens.future { token =>
+      renameProvider.rename(params, token)
+    }
 
   @JsonRequest("textDocument/references")
   def references(
@@ -1984,10 +1987,7 @@ class MetalsLanguageServer(
           params <- debugSessionParams
           server <- statusBar.trackFuture(
             "Starting debug server",
-            debugProvider.start(
-              params,
-              scalaVersionSelector,
-            ),
+            debugProvider.start(params),
           )
         } yield {
           statusBar.addMessage("Started debug server!")

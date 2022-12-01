@@ -71,6 +71,12 @@ public abstract class PresentationCompiler {
     public abstract CompletableFuture<Optional<Hover>> hover(OffsetParams params);
 
     /**
+     * Renames the symbol at given position and all of its occurrences to `name`.
+     * @implNote use only on symbols defined inside a method
+    */
+    public abstract CompletableFuture<List<TextEdit>> rename(OffsetParams params, String name);
+
+    /**
      * Returns the definition of the symbol at the given position.
      */
     public abstract CompletableFuture<DefinitionResult> definition(OffsetParams params);

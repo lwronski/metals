@@ -50,6 +50,7 @@ class Completions(
     config: PresentationCompilerConfig,
     workspace: Option[Path],
     autoImports: AutoImportsGenerator,
+    options: List[String],
 ):
 
   implicit val context: Context = ctx
@@ -80,6 +81,14 @@ class Completions(
           !isNotLocalForwardReference(sym) ||
           sym.isPackageObject
 
+      def isWildcardParam(sym: Symbol) =
+        if sym.isTerm && sym.owner.isAnonymousFunction then
+          sym.name match
+            case DerivedName(under, _) =>
+              under.isEmpty
+            case _ => false
+        else false
+
       if generalExclude then false
       else
         this match
@@ -100,6 +109,7 @@ class Completions(
               sym.is(Module) &&
                 (sym.companionClass == NoSymbol && sym.info.allMembers.nonEmpty)
             allowModule
+          case Term if isWildcardParam(sym) => false
           case Term if sym.isTerm || sym.is(Package) => true
           case Import => true
           case _ => false
@@ -176,24 +186,26 @@ class Completions(
     val (all, result) =
       if exclusive then (advanced, SymbolSearch.Result.COMPLETE)
       else
+        val keywords = KeywordsCompletions.contribute(path, completionPos)
+        val allAdvanced = advanced ++ keywords
         path match
           // should not show completions for toplevel
           case Nil if pos.source.file.extension != "sc" =>
-            (advanced, SymbolSearch.Result.COMPLETE)
+            (allAdvanced, SymbolSearch.Result.COMPLETE)
           case Select(qual, _) :: _ if qual.tpe.isErroneous =>
-            (advanced, SymbolSearch.Result.COMPLETE)
+            (allAdvanced, SymbolSearch.Result.COMPLETE)
           case Select(qual, _) :: _ =>
             val (_, compilerCompletions) = Completion.completions(pos)
             val (compiler, result) = compilerCompletions
               .flatMap(toCompletionValues)
               .filterInteresting(qual.typeOpt.widenDealias)
-            (advanced ++ compiler, result)
+            (allAdvanced ++ compiler, result)
           case _ =>
             val (_, compilerCompletions) = Completion.completions(pos)
             val (compiler, result) = compilerCompletions
               .flatMap(toCompletionValues)
               .filterInteresting()
-            (advanced ++ compiler, result)
+            (allAdvanced ++ compiler, result)
         end match
 
     val application = CompletionApplication.fromPath(path)
@@ -351,6 +363,7 @@ class Completions(
             config,
             search,
             autoImports,
+            options.contains("-no-indent"),
           ),
           false,
         )
@@ -410,7 +423,7 @@ class Completions(
 
       // class FooImpl extends Foo:
       //   def x|
-      case OverrideExtractor(td, completing, start, exhaustive) =>
+      case OverrideExtractor(td, completing, start, exhaustive, fallbackName) =>
         (
           OverrideCompletions.contribute(
             td,
@@ -420,6 +433,7 @@ class Completions(
             search,
             config,
             autoImports,
+            fallbackName,
           ),
           exhaustive,
         )
@@ -485,8 +499,7 @@ class Completions(
           indexedContext,
           config.isCompletionSnippetsEnabled,
         )
-        val keywords = KeywordsCompletions.contribute(path, completionPos)
-        (args ++ keywords, false)
+        (args, false)
     end match
   end advancedCompletions
 
@@ -552,7 +565,7 @@ class Completions(
                 completionsWithSuffix(
                   sym,
                   sym.decodedName,
-                  CompletionValue.Workspace(_, _, _),
+                  CompletionValue.Workspace(_, _, _, sym),
                 ).forall(visit),
         )
         Some(search.search(query, buildTargetIdentifier, visitor))
@@ -733,7 +746,7 @@ class Completions(
         // show the abstract members first
         if !ov.symbol.is(Deferred) then penalty |= MemberOrdering.IsNotAbstract
         penalty
-      case CompletionValue.Workspace(_, sym, _) =>
+      case CompletionValue.Workspace(_, sym, _, _) =>
         symbolRelevance(sym) | (IsWorkspaceSymbol + sym.name.show.length)
       case sym: CompletionValue.Symbolic =>
         symbolRelevance(sym.symbol)

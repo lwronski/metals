@@ -83,6 +83,7 @@ class CompletionProvider(
             config,
             workspace,
             autoImportsGen,
+            driver.settings,
           ).completions()
 
         val items = completions.zipWithIndex.map { case (item, idx) =>
@@ -243,7 +244,7 @@ class CompletionProvider(
         case (_: Ident) :: (_: Import) :: _ =>
           mkItem(sym.fullNameBackticked)
         case _ =>
-          autoImports.editsForSymbol(sym) match
+          autoImports.editsForSymbol(v.importSymbol) match
             case Some(edits) =>
               edits match
                 case AutoImportEdits(Some(nameEdit), other) =>
@@ -274,6 +275,7 @@ class CompletionProvider(
                 case _ =>
                   mkItem(sym.fullNameBackticked + completionTextSuffix)
               end match
+          end match
       end match
     end mkItemWithImports
 

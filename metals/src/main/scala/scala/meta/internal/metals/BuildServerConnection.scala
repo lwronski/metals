@@ -88,16 +88,14 @@ class BuildServerConnection private (
   def supportsTestSelection: Boolean = isBloop || isSbt || isScalaCLI
 
   /* Some users may still use an old version of Bloop that relies on scala-debug-adapter 1.x.
-   * This method is used to do the switch between MetalsDebugAdapter1x and MetalsDebugAdapter2x.
-   * At some point we should drop the support for those old versions of Bloop and remove
-   * this method, also the MetalsDebugAdapter1x and the ClassFinder classes
+   * Metals does not support scala-debug-adapter 1.x anymore.
    */
   def usesScalaDebugAdapter2x: Boolean = {
     def supportNewDebugAdapter = SemVer.isCompatibleVersion(
       "1.4.10",
       version,
     )
-    isSbt || (isBloop && supportNewDebugAdapter)
+    isSbt || isScalaCLI || (isBloop && supportNewDebugAdapter)
   }
 
   def workspaceDirectory: AbsolutePath = workspace
@@ -178,6 +176,30 @@ class BuildServerConnection private (
   def startDebugSession(params: DebugSessionParams): Future[URI] = {
     register(server => server.debugSessionStart(params)).asScala
       .map(address => URI.create(address.getUri))
+  }
+
+  def jvmRunEnvironment(
+      params: JvmRunEnvironmentParams
+  ): Future[JvmRunEnvironmentResult] = {
+    def empty = new JvmRunEnvironmentResult(Collections.emptyList)
+    connection.flatMap { conn =>
+      if (conn.capabilities.getJvmRunEnvironmentProvider()) {
+        register(
+          server => server.jvmRunEnvironment(params),
+          onFail = Some(
+            (
+              empty,
+              s"${name} should support `buildTarget/jvmRunEnvironment`, but it fails.",
+            )
+          ),
+        ).asScala
+      } else {
+        scribe.warn(
+          s"${conn.displayName} does not support `buildTarget/jvmRunEnvironment`, unable to fetch run environment."
+        )
+        Future.successful(empty)
+      }
+    }
   }
 
   def workspaceBuildTargets(): Future[WorkspaceBuildTargetsResult] = {

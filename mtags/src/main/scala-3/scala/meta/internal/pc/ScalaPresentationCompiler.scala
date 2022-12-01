@@ -33,6 +33,7 @@ import dotty.tools.dotc.interactive.InteractiveDriver
 import dotty.tools.dotc.reporting.StoreReporter
 import dotty.tools.dotc.util.*
 import org.eclipse.lsp4j.DocumentHighlight
+import org.eclipse.lsp4j.RenameParams
 import org.eclipse.{lsp4j as l}
 
 case class ScalaPresentationCompiler(
@@ -137,7 +138,7 @@ case class ScalaPresentationCompiler(
       params.token,
     ) { access =>
       val driver = access.compiler()
-      PcDocumentHighlightProvider.highlights(driver, params).asJava
+      PcDocumentHighlightProvider(driver, params).highlights.asJava
     }
 
   def shutdown(): Unit =
@@ -236,6 +237,7 @@ case class ScalaPresentationCompiler(
         extractionPos,
         pc.compiler(),
         search,
+        options.contains("-no-indent"),
       )
         .extractMethod()
         .asJava
@@ -277,6 +279,18 @@ case class ScalaPresentationCompiler(
       HoverProvider.hover(params, driver, search)
     }
   end hover
+
+  def rename(
+      params: OffsetParams,
+      name: String,
+  ): CompletableFuture[ju.List[l.TextEdit]] =
+    compilerAccess.withNonInterruptableCompiler(
+      List[l.TextEdit]().asJava,
+      params.token,
+    ) { access =>
+      val driver = access.compiler()
+      PcRenameProvider(driver, params, name).rename().asJava
+    }
 
   def newInstance(
       buildTargetIdentifier: String,

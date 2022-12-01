@@ -682,12 +682,13 @@ final case class TestingServer(
   }
 
   def startDebuggingUnresolved(
-      params: AnyRef
+      params: AnyRef,
+      stoppageHandler: Stoppage.Handler = Stoppage.Handler.Continue,
   ): Future[TestDebugger] = {
     assertSystemExit(params)
     executeCommandUnsafe(ServerCommands.StartDebugAdapter.id, Seq(params))
       .collect { case DebugSession(_, uri) =>
-        TestDebugger(URI.create(uri), Stoppage.Handler.Continue)
+        TestDebugger(URI.create(uri), stoppageHandler)
       }
   }
 
@@ -968,9 +969,19 @@ final case class TestingServer(
     } yield classes
   }
 
-  def codeLenses(filename: String, printCommand: Boolean = false)(
+  def codeLensesText(filename: String, printCommand: Boolean = false)(
       maxRetries: Int
   ): Future[String] = {
+    for {
+      lenses <- codeLenses(filename, maxRetries)
+      textEdits = CodeLensesTextEdits(lenses, printCommand)
+    } yield TextEdits.applyEdits(textContents(filename), textEdits.toList)
+  }
+
+  def codeLenses(
+      filename: String,
+      maxRetries: Int = 4,
+  ): Future[List[l.CodeLens]] = {
     val path = toPath(filename)
     val uri = path.toURI.toString
     val params = new CodeLensParams(new TextDocumentIdentifier(uri))
@@ -1009,8 +1020,7 @@ final case class TestingServer(
       // first compilation, to trigger the handler
       _ <- server.compilations.compileFile(path)
       lenses <- codeLenses.future
-      textEdits = CodeLensesTextEdits(lenses, printCommand)
-    } yield TextEdits.applyEdits(textContents(filename), textEdits.toList)
+    } yield lenses
   }
 
   def formatCompletion(

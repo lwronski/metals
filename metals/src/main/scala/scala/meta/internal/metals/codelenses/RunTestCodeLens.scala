@@ -15,6 +15,7 @@ import scala.meta.internal.metals.TestUserInterfaceKind
 import scala.meta.internal.metals.UserConfiguration
 import scala.meta.internal.metals.debug.BuildTargetClasses
 import scala.meta.internal.metals.debug.DebugProvider
+import scala.meta.internal.metals.debug.ExtendedScalaMainClass
 import scala.meta.internal.parsing.TokenEditDistance
 import scala.meta.internal.parsing.Trees
 import scala.meta.internal.semanticdb.MethodSignature
@@ -56,25 +57,33 @@ final class RunTestCodeLens(
   ): Seq[l.CodeLens] = {
     val textDocument = textDocumentWithPath.textDocument
     val path = textDocumentWithPath.filePath
-    if (path.isAmmoniteScript || path.isWorksheet) {
-      Seq.empty
-    } else {
-      val distance = buffers.tokenEditDistance(path, textDocument.text, trees)
-      val lenses = for {
-        buildTargetId <- buildTargets.inverseSources(path)
-        buildTarget <- buildTargets.info(buildTargetId)
-        connection <- buildTargets.buildServerOf(buildTargetId)
-        // although hasDebug is already available in BSP capabilities
-        // see https://github.com/build-server-protocol/build-server-protocol/pull/161
-        // most of the bsp servers such as bloop and sbt might not support it.
-        if buildTarget.getCapabilities.getCanDebug || connection.isBloop || connection.isSbt,
-      } yield {
-        val classes = buildTargetClasses.classesOf(buildTargetId)
-        codeLenses(textDocument, buildTargetId, classes, distance, path)
-      }
+    val distance = buffers.tokenEditDistance(path, textDocument.text, trees)
+    val lenses = for {
+      buildTargetId <- buildTargets.inverseSources(path)
+      buildTarget <- buildTargets.info(buildTargetId)
+      connection <- buildTargets.buildServerOf(buildTargetId)
+      // although hasDebug is already available in BSP capabilities
+      // see https://github.com/build-server-protocol/build-server-protocol/pull/161
+      // most of the bsp servers such as bloop and sbt might not support it.
+    } yield {
+      val classes = buildTargetClasses.classesOf(buildTargetId)
+      if (connection.isScalaCLI && path.isAmmoniteScript) {
+        scalaCliCodeLenses(textDocument, buildTargetId, classes)
+      } else if (
+        buildTarget.getCapabilities.getCanDebug || connection.isBloop || connection.isSbt
+      ) {
+        codeLenses(
+          textDocument,
+          buildTargetId,
+          classes,
+          distance,
+          path,
+        )
+      } else { Nil }
 
-      lenses.getOrElse(Seq.empty)
     }
+
+    lenses.getOrElse(Seq.empty)
   }
 
   /**
@@ -181,6 +190,31 @@ final class RunTestCodeLens(
     } yield new l.CodeLens(range, command, null)
   }
 
+  private def scalaCliCodeLenses(
+      textDocument: TextDocument,
+      target: BuildTargetIdentifier,
+      classes: BuildTargetClasses.Classes,
+  ): Seq[l.CodeLens] = {
+    val scriptFileName = textDocument.uri.stripSuffix(".sc")
+
+    val expectedMainClass =
+      if (scriptFileName.contains('/')) s"${scriptFileName}_sc."
+      else s"_empty_/${scriptFileName}_sc."
+    val main =
+      classes.mainClasses
+        .get(expectedMainClass)
+        .map(mainCommand(target, _))
+        .getOrElse(Nil)
+
+    main.map(command =>
+      new l.CodeLens(
+        new l.Range(new l.Position(0, 0), new l.Position(0, 2)),
+        command,
+        null,
+      )
+    )
+  }
+
   /**
    * Do not return test code lenses if user declared test explorer as a test interface.
    */
@@ -219,9 +253,16 @@ final class RunTestCodeLens(
       target: b.BuildTargetIdentifier,
       main: b.ScalaMainClass,
   ): List[l.Command] = {
+    val data = buildTargets
+      .jvmRunEnvironment(target)
+      .zip(userConfig().usedJavaBinary) match {
+      case None =>
+        main.toJson
+      case Some((env, javaHome)) =>
+        ExtendedScalaMainClass(main, env, javaHome).toJson
+    }
     val params = {
       val dataKind = b.DebugSessionParamsDataKind.SCALA_MAIN_CLASS
-      val data = main.toJson
       sessionParams(target, dataKind, data)
     }
 
